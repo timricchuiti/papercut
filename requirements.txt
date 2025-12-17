@@ -1,0 +1,3 @@
+auto-editor
+whisperx
+ffmpeg-python
