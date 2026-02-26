@@ -631,6 +631,64 @@ video { width: 100%; display: block; max-height: 400px; }
 }
 .export-spacer { flex: 1; }
 
+/* ── Info Tooltip ── */
+.info-tip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--border);
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 700;
+  font-style: normal;
+  font-family: var(--font-display);
+  cursor: pointer;
+  position: relative;
+  margin-left: 4px;
+  vertical-align: middle;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+.info-tip:hover {
+  background: var(--blue);
+  color: #fff;
+}
+.info-tip .tip-text {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--ink);
+  color: #e0e0e0;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+  padding: 10px 14px;
+  border-radius: 6px;
+  width: 260px;
+  white-space: normal;
+  box-shadow: var(--shadow-lg);
+  z-index: 100;
+  pointer-events: none;
+}
+.info-tip .tip-text::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-top-color: var(--ink);
+}
+.info-tip:hover .tip-text,
+.info-tip:focus .tip-text {
+  display: block;
+}
+
 /* ── Advanced Panel ── */
 #advanced-panel {
   padding-bottom: 24px;
@@ -929,12 +987,12 @@ video { width: 100%; display: block; max-height: 400px; }
     <div class="advanced-card">
       <div class="advanced-title">Advanced Options</div>
       <div class="advanced-grid">
-        <label>Silent speed <input type="text" id="silentSpeed" placeholder="99999 (cut)"></label>
-        <label>Sounded speed <input type="text" id="soundedSpeed" placeholder="1"></label>
-        <label>Video codec <input type="text" id="videoCodec" placeholder="auto"></label>
-        <label>Audio codec <input type="text" id="audioCodec" placeholder="auto"></label>
-        <label>FFmpeg args <input type="text" id="ffmpegArgs" placeholder="-crf 22 -preset veryfast"></label>
-        <label>Edit method <input type="text" id="editMethod" placeholder="audio:threshold=4%"></label>
+        <label>Silent speed <span class="info-tip" tabindex="0">i<span class="tip-text">Playback speed for silent/cut sections. Use 99999 to fully remove them, or a number like 8 to speed them up instead.</span></span> <input type="text" id="silentSpeed" placeholder="99999 (cut)"></label>
+        <label>Sounded speed <span class="info-tip" tabindex="0">i<span class="tip-text">Playback speed for sections with audio. Default is 1 (normal speed). Use 1.5 or 2 to speed up the entire sounded portion.</span></span> <input type="text" id="soundedSpeed" placeholder="1"></label>
+        <label>Video codec <span class="info-tip" tabindex="0">i<span class="tip-text">Video codec for re-encoding. Common options: h264, h265/hevc, prores. Leave blank for auto-editor's default.</span></span> <input type="text" id="videoCodec" placeholder="auto"></label>
+        <label>Audio codec <span class="info-tip" tabindex="0">i<span class="tip-text">Audio codec for re-encoding. Common options: aac, pcm_s16le, mp3. Leave blank for auto-editor's default.</span></span> <input type="text" id="audioCodec" placeholder="auto"></label>
+        <label>FFmpeg args <span class="info-tip" tabindex="0">i<span class="tip-text">Extra FFmpeg arguments passed through to the encoder. Example: -crf 22 -preset veryfast for H.264 quality/speed tradeoff.</span></span> <input type="text" id="ffmpegArgs" placeholder="-crf 22 -preset veryfast"></label>
+        <label>Edit method <span class="info-tip" tabindex="0">i<span class="tip-text">auto-editor's --edit flag. Controls what gets detected as silence. Examples: audio:threshold=4%, motion:threshold=2%, or combine with audio:or:motion.</span></span> <input type="text" id="editMethod" placeholder="audio:threshold=4%"></label>
       </div>
     </div>
   </div>
