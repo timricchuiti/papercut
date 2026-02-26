@@ -760,6 +760,12 @@ const $summaryBar = document.getElementById("summary-bar");
 const $exportResult = document.getElementById("export-result");
 
 // ── Utilities ──
+let _debounceTimers = {};
+function debounce(key, fn, ms = 250) {
+  clearTimeout(_debounceTimers[key]);
+  _debounceTimers[key] = setTimeout(fn, ms);
+}
+
 function fmt(sec) {
   const m = Math.floor(sec / 60);
   const s = (sec % 60).toFixed(1);
@@ -1074,6 +1080,47 @@ function renderEditPane() {
   }
 }
 
+function bindTextEditing(el) {
+  if (!el) return;
+  const id = parseInt(el.dataset.blockId);
+
+  // Track text at focus time for undo
+  let textAtFocus = "";
+  el.addEventListener("focus", () => {
+    const b = blocks.find(x => x.id === id);
+    if (b) textAtFocus = b.text;
+  });
+
+  // Live update on input (debounced)
+  el.addEventListener("input", () => {
+    const b = blocks.find(x => x.id === id);
+    if (!b) return;
+    b.text = el.textContent.trim();
+    debounce("edit-" + id, () => {
+      updateOriginalBlock(id);
+      updateSummary();
+    }, 150);
+  });
+
+  // Snapshot undo on blur
+  el.addEventListener("blur", () => {
+    const b = blocks.find(x => x.id === id);
+    if (!b) return;
+    b.text = el.textContent.trim();
+    if (b.text !== textAtFocus) {
+      undoStack.push({ type: "edit", id: b.id, prevText: textAtFocus });
+      $undoBtn.disabled = false;
+    }
+    // Final sync (no debounce)
+    updateOriginalBlock(id);
+    updateSummary();
+  });
+
+  el.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); el.blur(); }
+  });
+}
+
 function bindEditPaneEvents() {
   // Cut buttons
   $editPane.querySelectorAll("[data-cut]").forEach(btn => {
@@ -1096,25 +1143,9 @@ function bindEditPaneEvents() {
     el.addEventListener("click", () => seekTo(parseFloat(el.dataset.seek)));
   });
 
-  // Text editing — update on blur, sync to left
+  // Text editing — live sync to left on input, undo snapshot on blur
   $editPane.querySelectorAll('.block-text[contenteditable="true"]').forEach(el => {
-    el.addEventListener("blur", () => {
-      const id = parseInt(el.dataset.blockId);
-      const b = blocks.find(x => x.id === id);
-      if (!b) return;
-      const newText = el.textContent.trim();
-      if (newText !== b.text) {
-        // Push undo for text edit
-        undoStack.push({ type: "edit", id: b.id, prevText: b.text });
-        $undoBtn.disabled = false;
-        b.text = newText;
-        updateOriginalBlock(b.id);
-        updateSummary();
-      }
-    });
-    el.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); el.blur(); }
-    });
+    bindTextEditing(el);
   });
 
   // Click card to seek (but not on buttons or editable text)
@@ -1203,20 +1234,7 @@ function updateEditBlock(id) {
       cutBlock(b.id);
     });
     card.querySelector("[data-seek]").addEventListener("click", () => seekTo(b.start));
-    const textEl = card.querySelector('[contenteditable="true"]');
-    textEl.addEventListener("blur", () => {
-      const newText = textEl.textContent.trim();
-      if (newText !== b.text) {
-        undoStack.push({ type: "edit", id: b.id, prevText: b.text });
-        $undoBtn.disabled = false;
-        b.text = newText;
-        updateOriginalBlock(b.id);
-        updateSummary();
-      }
-    });
-    textEl.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); textEl.blur(); }
-    });
+    bindTextEditing(card.querySelector('[contenteditable="true"]'));
   }
 
   card.addEventListener("click", (e) => {
