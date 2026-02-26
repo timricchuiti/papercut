@@ -80,7 +80,7 @@ header h1 {
   color: var(--indigo);
 }
 header h1 span { color: var(--blue); }
-#advancedToggle {
+#settingsToggle {
   background: none;
   border: 1px solid var(--border);
   color: var(--text-secondary);
@@ -92,9 +92,121 @@ header h1 span { color: var(--blue); }
   font-weight: 500;
   transition: all 0.15s;
 }
-#advancedToggle:hover {
+#settingsToggle:hover {
   border-color: var(--blue);
   color: var(--blue);
+}
+
+/* ── Settings Overlay ── */
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(1, 22, 39, 0.4);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.15s ease-out;
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.settings-panel {
+  background: var(--bg-surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  width: 580px;
+  max-height: 85vh;
+  overflow-y: auto;
+  animation: slideUp 0.2s ease-out;
+}
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border-light);
+}
+.settings-header h2 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--indigo);
+}
+.settings-close {
+  background: none;
+  border: none;
+  font-size: 20px;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  line-height: 1;
+}
+.settings-close:hover { background: var(--bg-page); color: var(--text); }
+.settings-body {
+  padding: 24px;
+}
+.settings-section {
+  margin-bottom: 24px;
+}
+.settings-section:last-child { margin-bottom: 0; }
+.settings-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--text-dim);
+  margin-bottom: 14px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-light);
+}
+.settings-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.settings-field.full-width {
+  grid-column: 1 / -1;
+}
+.settings-field label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+.settings-field input,
+.settings-field select {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text);
+  background: #fff;
+  transition: border-color 0.15s;
+}
+.settings-field input:focus,
+.settings-field select:focus { outline: none; border-color: var(--blue); }
+.settings-field .hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+.settings-footer {
+  padding: 16px 24px;
+  border-top: 1px solid var(--border-light);
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
 /* ── Drop Zone ── */
@@ -608,9 +720,113 @@ video { width: 100%; display: block; max-height: 400px; }
 <header>
   <div class="container-wide">
     <h1>Transcript-Aware <span>Auto-Editor</span></h1>
-    <button id="advancedToggle" onclick="toggleAdvanced()">Advanced</button>
+    <button id="settingsToggle" onclick="toggleSettings()">Settings</button>
   </div>
 </header>
+
+<!-- Settings Overlay -->
+<div id="settingsOverlay" class="settings-overlay hidden" onclick="if(event.target===this)toggleSettings()">
+  <div class="settings-panel">
+    <div class="settings-header">
+      <h2>Settings</h2>
+      <button class="settings-close" onclick="toggleSettings()">&times;</button>
+    </div>
+    <div class="settings-body">
+
+      <div class="settings-section">
+        <div class="settings-section-title">Transcription</div>
+        <div class="settings-grid">
+          <div class="settings-field">
+            <label>WhisperX model</label>
+            <select id="settWhisperModel">
+              <option value="tiny">tiny</option>
+              <option value="base">base</option>
+              <option value="small">small</option>
+              <option value="medium" selected>medium</option>
+              <option value="large-v2">large-v2</option>
+              <option value="large-v3">large-v3</option>
+            </select>
+          </div>
+          <div class="settings-field">
+            <label>Language</label>
+            <input type="text" id="settLanguage" value="en" placeholder="en">
+            <span class="hint">ISO 639-1 code (en, es, fr, de, ja...)</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-title">Export Defaults</div>
+        <div class="settings-grid">
+          <div class="settings-field">
+            <label>Default format</label>
+            <select id="settExportFormat">
+              <option value="final-cut-pro">Final Cut Pro</option>
+              <option value="premiere">Premiere</option>
+              <option value="resolve">DaVinci Resolve</option>
+              <option value="clip-sequence">Clip Sequence</option>
+              <option value="video">Video</option>
+            </select>
+          </div>
+          <div class="settings-field">
+            <label>Default margin (sec)</label>
+            <input type="number" id="settMargin" value="0.10" min="0" max="2" step="0.05">
+          </div>
+          <div class="settings-field">
+            <label>Silent speed</label>
+            <input type="text" id="settSilentSpeed" placeholder="99999 (cut)">
+          </div>
+          <div class="settings-field">
+            <label>Sounded speed</label>
+            <input type="text" id="settSoundedSpeed" placeholder="1">
+          </div>
+          <div class="settings-field">
+            <label>Video codec</label>
+            <input type="text" id="settVideoCodec" placeholder="auto">
+          </div>
+          <div class="settings-field">
+            <label>Audio codec</label>
+            <input type="text" id="settAudioCodec" placeholder="auto">
+          </div>
+          <div class="settings-field full-width">
+            <label>FFmpeg args</label>
+            <input type="text" id="settFfmpegArgs" placeholder="-crf 22 -preset veryfast">
+          </div>
+          <div class="settings-field full-width">
+            <label>Edit method</label>
+            <input type="text" id="settEditMethod" placeholder="audio:threshold=4%">
+            <span class="hint">auto-editor --edit flag (e.g. audio:threshold=4%, motion:threshold=2%)</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-title">Editor</div>
+        <div class="settings-grid">
+          <div class="settings-field">
+            <label>Sync playback on load</label>
+            <select id="settSyncPlayback">
+              <option value="true" selected>On</option>
+              <option value="false">Off</option>
+            </select>
+          </div>
+          <div class="settings-field">
+            <label>Sync scroll on load</label>
+            <select id="settSyncScroll">
+              <option value="true" selected>On</option>
+              <option value="false">Off</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+    </div>
+    <div class="settings-footer">
+      <button class="btn btn-secondary btn-sm" onclick="resetSettings()">Reset Defaults</button>
+      <button class="btn btn-primary btn-sm" onclick="saveSettings()">Save</button>
+    </div>
+  </div>
+</div>
 
 <div class="container">
 
@@ -703,6 +919,7 @@ video { width: 100%; display: block; max-height: 400px; }
         </select>
       </div>
       <div class="export-spacer"></div>
+      <button class="btn btn-secondary btn-sm" id="advancedToggle" onclick="toggleAdvanced()">Advanced</button>
       <button class="btn btn-primary" id="exportBtn" onclick="startExport()">Export</button>
     </div>
   </div>
@@ -898,7 +1115,11 @@ function startTranscribe() {
   fetch("/api/transcribe", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ video_path: path }),
+    body: JSON.stringify({
+      video_path: path,
+      model: loadSettings().whisperModel,
+      language: loadSettings().language,
+    }),
   }).then(response => {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -1363,9 +1584,99 @@ $marginSlider.addEventListener("input", () => {
 function toggleAdvanced() {
   const panel = document.getElementById("advanced-panel");
   panel.classList.toggle("hidden");
-  document.getElementById("advancedToggle").textContent =
-    panel.classList.contains("hidden") ? "Advanced" : "Simple";
+  const btn = document.getElementById("advancedToggle");
+  btn.textContent = panel.classList.contains("hidden") ? "Advanced" : "Simple";
 }
+
+// ── Settings ──
+const SETTINGS_KEY = "transcript-editor-settings";
+
+const SETTINGS_DEFAULTS = {
+  whisperModel: "medium",
+  language: "en",
+  exportFormat: "final-cut-pro",
+  margin: "0.10",
+  silentSpeed: "",
+  soundedSpeed: "",
+  videoCodec: "",
+  audioCodec: "",
+  ffmpegArgs: "",
+  editMethod: "",
+  syncPlayback: "true",
+  syncScroll: "true",
+};
+
+function loadSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY));
+    return { ...SETTINGS_DEFAULTS, ...saved };
+  } catch {
+    return { ...SETTINGS_DEFAULTS };
+  }
+}
+
+function applySettings() {
+  const s = loadSettings();
+
+  // Populate settings form
+  document.getElementById("settWhisperModel").value = s.whisperModel;
+  document.getElementById("settLanguage").value = s.language;
+  document.getElementById("settExportFormat").value = s.exportFormat;
+  document.getElementById("settMargin").value = s.margin;
+  document.getElementById("settSilentSpeed").value = s.silentSpeed;
+  document.getElementById("settSoundedSpeed").value = s.soundedSpeed;
+  document.getElementById("settVideoCodec").value = s.videoCodec;
+  document.getElementById("settAudioCodec").value = s.audioCodec;
+  document.getElementById("settFfmpegArgs").value = s.ffmpegArgs;
+  document.getElementById("settEditMethod").value = s.editMethod;
+  document.getElementById("settSyncPlayback").value = s.syncPlayback;
+  document.getElementById("settSyncScroll").value = s.syncScroll;
+
+  // Apply to main UI
+  document.getElementById("exportFormat").value = s.exportFormat;
+  $marginSlider.value = parseFloat(s.margin);
+  $marginVal.textContent = parseFloat(s.margin).toFixed(2) + "s";
+  document.getElementById("silentSpeed").value = s.silentSpeed;
+  document.getElementById("soundedSpeed").value = s.soundedSpeed;
+  document.getElementById("videoCodec").value = s.videoCodec;
+  document.getElementById("audioCodec").value = s.audioCodec;
+  document.getElementById("ffmpegArgs").value = s.ffmpegArgs;
+  document.getElementById("editMethod").value = s.editMethod;
+  $syncToggle.checked = s.syncPlayback === "true";
+  $scrollSyncToggle.checked = s.syncScroll === "true";
+}
+
+function saveSettings() {
+  const s = {
+    whisperModel: document.getElementById("settWhisperModel").value,
+    language: document.getElementById("settLanguage").value,
+    exportFormat: document.getElementById("settExportFormat").value,
+    margin: document.getElementById("settMargin").value,
+    silentSpeed: document.getElementById("settSilentSpeed").value.trim(),
+    soundedSpeed: document.getElementById("settSoundedSpeed").value.trim(),
+    videoCodec: document.getElementById("settVideoCodec").value.trim(),
+    audioCodec: document.getElementById("settAudioCodec").value.trim(),
+    ffmpegArgs: document.getElementById("settFfmpegArgs").value.trim(),
+    editMethod: document.getElementById("settEditMethod").value.trim(),
+    syncPlayback: document.getElementById("settSyncPlayback").value,
+    syncScroll: document.getElementById("settSyncScroll").value,
+  };
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
+  applySettings();
+  toggleSettings();
+}
+
+function resetSettings() {
+  localStorage.removeItem(SETTINGS_KEY);
+  applySettings();
+}
+
+function toggleSettings() {
+  document.getElementById("settingsOverlay").classList.toggle("hidden");
+}
+
+// Apply saved settings on load
+applySettings();
 
 // ── Export ──
 function startExport() {
