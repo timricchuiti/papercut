@@ -1,4 +1,4 @@
-# 🛠️ Transcript-Aware Auto-Editor Extension
+# PaperCut
 
 > **A wrapper for [auto-editor](https://github.com/WyattBlue/auto-editor) that enables transcript-based video editing.**
 
@@ -89,8 +89,8 @@ python3 main.py my_video.mp4 \
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/YOUR_USERNAME/transcript-aware-auto-editor.git
-cd transcript-aware-auto-editor
+git clone https://github.com/YOUR_USERNAME/papercut.git
+cd papercut
 ```
 
 2. Install dependencies:
@@ -102,7 +102,7 @@ pip install -r requirements.txt
 
 ## 📁 Project Structure
 ```
-transcript-aware-auto-editor/
+papercut/
 ├── auto_transcript.py      # Generate transcripts using WhisperX
 ├── transcript_diff.py      # Diff engine for detecting deletions
 ├── merge_cutlists.py       # Merge transcript cuts with auto-editor cuts

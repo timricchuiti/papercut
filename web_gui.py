@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Flask web GUI for transcript-aware auto-editor."""
+"""Flask web GUI for PaperCut."""
 
 import argparse
 import json
@@ -17,7 +17,7 @@ from merge_cutlists import build_auto_editor_cmd, run_auto_editor
 app = Flask(__name__, static_folder="static")
 app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024 * 1024  # 10 GB
 
-UPLOAD_DIR = Path(tempfile.gettempdir()) / "auto-editor-gui"
+UPLOAD_DIR = Path(tempfile.gettempdir()) / "papercut"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
 
@@ -268,13 +268,13 @@ def _seconds_to_srt_time(seconds):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Web GUI for transcript-aware auto-editor")
+    parser = argparse.ArgumentParser(description="Web GUI for PaperCut")
     parser.add_argument("--port", type=int, default=5000, help="Port to run on (default: 5000)")
     parser.add_argument("--host", default="127.0.0.1", help="Host to bind to (default: 127.0.0.1)")
     parser.add_argument("--debug", action="store_true", help="Run in debug mode")
     args = parser.parse_args()
 
-    print(f"Starting transcript-aware auto-editor GUI at http://{args.host}:{args.port}")
+    print(f"Starting PaperCut at http://{args.host}:{args.port}")
     app.run(host=args.host, port=args.port, debug=args.debug)
 
 

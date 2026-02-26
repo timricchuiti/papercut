@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI orchestrator for the transcript-aware auto-editor pipeline."""
+"""CLI orchestrator for PaperCut — transcript-based video editing."""
 
 import argparse
 import json
@@ -88,7 +88,7 @@ def open_in_editor(filepath):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Transcript-aware video editing via auto-editor.",
+        description="PaperCut — transcript-based video editing.",
         epilog="Example: python3 main.py video.mp4 --transcript video.srt --whisper-json video.json --export final-cut-pro",
     )
     parser.add_argument("video", help="Path to the input video file")

@@ -1,4 +1,4 @@
-# CLAUDE.md — Transcript-Aware Auto-Editor
+# CLAUDE.md — PaperCut
 
 ## Project Overview
 
@@ -77,6 +77,7 @@ python3 main.py my_video.mp4 \
 
 ## Development Guidelines
 
+- **Do NOT commit or push unless explicitly asked.** Wait for Tim to say when he wants a commit.
 - Keep modules independent and testable — each file should work as a standalone unit
 - SRT parsing must be robust against messy edits (extra blank lines, missing block numbers, etc.)
 - Use `argparse` for CLI argument handling

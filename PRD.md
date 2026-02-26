@@ -1,6 +1,6 @@
-# Product Requirements Document: Transcript-Aware Auto-Editor Extension
+# Product Requirements Document: PaperCut
 
-**Project Title:** Transcript-Aware Auto-Editor Extension
+**Project Title:** PaperCut
 **Purpose:** To extend the existing `auto-editor` tool with a minimal, "Descript-like" transcript editing layer. This allows users to manually delete text segments in a transcript file to remove them from the final video, while preserving `auto-editor`'s native ability to remove silence and motion.
 
 ---
