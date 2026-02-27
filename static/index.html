@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PaperCut</title>
+<link rel="icon" type="image/png" href="/static/favicon.png">
+<link rel="apple-touch-icon" href="/static/icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Courier+Prime:ital,wght@0,400;0,700;1,400&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
@@ -36,6 +38,31 @@
   --shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
   --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
   --shadow-lg: 0 8px 30px rgba(0,0,0,0.10);
+}
+
+[data-theme="dark"] {
+  --blue: #5BB8E8;
+  --blue-light: #1a2e3d;
+  --blue-pale: #141f2b;
+  --green: #6FC88B;
+  --green-light: #1a2d1f;
+  --sunray: #F0BC5E;
+  --sunray-light: #2b2415;
+  --brick: #E05A6C;
+  --brick-light: #2d1a1e;
+  --indigo: #a8c8dc;
+  --ink: #0d1117;
+  --bg: #161b22;
+  --bg-page: #0d1117;
+  --bg-surface: #161b22;
+  --border: #30363d;
+  --border-light: #21262d;
+  --text: #e6edf3;
+  --text-secondary: #8b949e;
+  --text-dim: #6e7681;
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.3);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.4);
+  --shadow-lg: 0 8px 30px rgba(0,0,0,0.5);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -191,7 +218,7 @@ header h1 span { color: var(--blue); }
   font-family: var(--font-mono);
   font-size: 13px;
   color: var(--text);
-  background: #fff;
+  background: var(--bg-surface);
   transition: border-color 0.15s;
 }
 .settings-field input:focus,
@@ -563,7 +590,7 @@ video { width: 100%; display: block; max-height: 400px; }
   font-size: 10px;
   font-weight: 500;
   color: var(--brick);
-  background: #fff;
+  background: var(--bg-surface);
   border: 1px solid var(--brick);
   padding: 2px 8px;
   border-radius: 4px;
@@ -619,7 +646,7 @@ video { width: 100%; display: block; max-height: 400px; }
   font-size: 13px;
   font-family: var(--font-display);
   padding: 6px 10px;
-  background: #fff;
+  background: var(--bg-surface);
   color: var(--text);
 }
 .export-bar input[type="range"] { width: 120px; accent-color: var(--blue); }
@@ -728,7 +755,7 @@ video { width: 100%; display: block; max-height: 400px; }
   font-family: var(--font-mono);
   font-size: 13px;
   color: var(--text);
-  background: #fff;
+  background: var(--bg-surface);
   transition: border-color 0.15s;
 }
 .advanced-grid input:focus { outline: none; border-color: var(--blue); }
@@ -771,6 +798,32 @@ video { width: 100%; display: block; max-height: 400px; }
 .script-page .block-card:nth-child(8) { animation-delay: 0.16s; }
 .script-page .block-card:nth-child(9) { animation-delay: 0.18s; }
 .script-page .block-card:nth-child(n+10) { animation-delay: 0.20s; }
+
+/* ── Theme Toggle ── */
+.theme-toggle {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  width: 34px;
+  height: 34px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  transition: all 0.15s;
+  line-height: 1;
+}
+.theme-toggle:hover {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 </style>
 </head>
 <body>
@@ -778,7 +831,10 @@ video { width: 100%; display: block; max-height: 400px; }
 <header>
   <div class="container-wide">
     <h1>Paper<span>Cut</span></h1>
-    <button id="settingsToggle" onclick="toggleSettings()">Settings</button>
+    <div class="header-actions">
+      <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" title="Toggle dark mode"></button>
+      <button id="settingsToggle" onclick="toggleSettings()">Settings</button>
+    </div>
   </div>
 </header>
 
@@ -1824,6 +1880,24 @@ function startExport() {
     $btn.textContent = "Export";
   });
 }
+
+// ── Theme Toggle ──
+function getTheme() {
+  return localStorage.getItem("papercut-theme") || "light";
+}
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute("data-theme", theme);
+  document.getElementById("themeToggle").textContent = theme === "dark" ? "\u2600" : "\u263E";
+}
+
+function toggleTheme() {
+  const next = getTheme() === "dark" ? "light" : "dark";
+  localStorage.setItem("papercut-theme", next);
+  applyTheme(next);
+}
+
+applyTheme(getTheme());
 
 // ── Keyboard shortcuts ──
 document.addEventListener("keydown", (e) => {
