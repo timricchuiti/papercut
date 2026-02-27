@@ -2,46 +2,60 @@
 
 > **A wrapper for [auto-editor](https://github.com/WyattBlue/auto-editor) that enables transcript-based video editing.**
 
-This tool extends `auto-editor` with a "Descript-like" workflow. It allows you to generate a transcript using **WhisperX**, manually delete unwanted text blocks from a `.srt` file, and then automatically cut those sections from your video—all while preserving `auto-editor`'s powerful silence and motion detection capabilities.
+PaperCut extends `auto-editor` with a "Descript-like" workflow. Generate a transcript using **WhisperX**, delete unwanted text blocks, and automatically cut those sections from your video — all while preserving `auto-editor`'s silence and motion detection.
 
 ---
 
-## ✨ Features
+## Features
 
 * **Hybrid Editing:** Combine automated silence removal with manual, text-based editorial choices.
 * **WhisperX Integration:** Generates highly accurate, word-level timestamps using [WhisperX](https://github.com/m-bain/whisperx).
-* **Simple Workflow:** Just delete lines from a text file to cut them from the video.
+* **Web GUI:** Browser-based editor with two-column transcript view, video sync, and one-click export.
+* **Auto-Edit Tools:** Clean filler words and deduplicate repeated takes automatically.
 * **NLE Ready:** Exports to **FCPXML** (Final Cut Pro), **Premiere XML**, **DaVinci Resolve**, or standard video files.
-* **Safe & Non-Destructive:** Uses a hidden JSON "source of truth" for timing to prevent errors if you accidentally mess up timestamps in the transcript.
+* **CLI Pipeline:** Every step also works from the command line for scripting and automation.
+* **Safe & Non-Destructive:** Uses WhisperX JSON as the timing source of truth — editing the transcript can't corrupt timestamps.
 
 ---
 
-## 🔍 How It Works
+## Quick Start (Web GUI)
 
-1. **WhisperX** generates word-level timestamps (JSON) and a human-readable transcript (SRT)
-2. You edit the SRT file by deleting unwanted text blocks
-3. The diff engine compares your edits against the original
-4. Your deletions are merged with auto-editor's silence detection
-5. Export to your preferred format (FCPXML, Premiere, video file)
+The web interface handles transcription, editing, and export in one place.
+
+```bash
+pip install -r requirements.txt
+python3 web_gui.py
+```
+
+Open **http://localhost:5000** in your browser, then:
+
+1. **Drop a video** (or paste a local path) — WhisperX transcribes it automatically
+2. **Edit the transcript** — delete blocks, edit text, or use the auto-edit tools:
+   - **Clean Fillers** removes blocks that are entirely filler words (um, uh, etc.)
+   - **Dedupe Takes** finds consecutive similar blocks and keeps only the last
+3. **Export** — choose your format and margin, click Export
+
+All edits support undo/redo (Ctrl+Z / Ctrl+Shift+Z), auto-save to localStorage, and keyboard navigation (arrow keys, Delete, Ctrl+F to search).
 
 ---
 
-## 🏗️ Development Usage
+## CLI Usage
 
-Since this project is in active development, you will run the scripts directly via Python.
+The same pipeline is available as standalone scripts for automation or integration into other workflows.
 
 ### 1. Generate the Transcript
-Run the transcription script on your video file:
+
 ```bash
 python3 auto_transcript.py my_video.mp4
 ```
 
-*Output: `my_video.json` (timing data) and `my_video.srt` (editable).*
+Output: `my_video.json` (word-level timing) and `my_video.srt` (editable transcript). A backup `my_video.srt.orig` is also created.
 
 ### 2. Edit the Transcript
-Open `my_video.srt` in any text editor (or whatever your video filename is, with `.srt` extension). **Delete the full blocks** (timestamp + text) for any sections you want to remove.
 
-**Example - Before editing:**
+Open `my_video.srt` in any text editor. Delete entire blocks (index + timestamp + text) for sections you want to remove.
+
+**Before editing:**
 ```srt
 1
 00:00:00,000 --> 00:00:02,100
@@ -53,7 +67,7 @@ Um, so today we're going to talk about...
 
 3
 00:00:05,210 --> 00:00:07,420
-Um, so that's the first thing we need to check.
+So today we're going to talk about editing.
 ```
 
 **After editing (block 2 deleted):**
@@ -64,11 +78,11 @@ Hey everyone, welcome back to the channel.
 
 3
 00:00:05,210 --> 00:00:07,420
-Um, so that's the first thing we need to check.
+So today we're going to talk about editing.
 ```
 
-### 3. Apply the Cuts
-Run the main script to merge your edits:
+### 3. Apply Cuts and Export
+
 ```bash
 python3 main.py my_video.mp4 \
   --transcript my_video.srt \
@@ -79,67 +93,59 @@ python3 main.py my_video.mp4 \
 
 ---
 
-## 📦 Installation
+## Installation
 
 **Prerequisites:**
 * Python 3.8+
 * [FFmpeg](https://ffmpeg.org/download.html)
+* [WhisperX](https://github.com/m-bain/whisperx) (requires Python 3.12 on some systems)
 
 **Setup:**
 
-1. Clone the repository:
 ```bash
-git clone https://github.com/YOUR_USERNAME/papercut.git
+git clone https://github.com/timricchuiti/papercut.git
 cd papercut
-```
-
-2. Install dependencies:
-```bash
 pip install -r requirements.txt
 ```
 
 ---
 
-## 📁 Project Structure
+## Project Structure
+
 ```
 papercut/
-├── auto_transcript.py      # Generate transcripts using WhisperX
-├── transcript_diff.py      # Diff engine for detecting deletions
-├── merge_cutlists.py       # Merge transcript cuts with auto-editor cuts
-├── main.py                 # Main CLI orchestrator
-├── requirements.txt        # Python dependencies
-└── README.md
+├── web_gui.py             # Web GUI server (primary interface)
+├── auto_transcript.py     # WhisperX transcription wrapper
+├── transcript_diff.py     # Diff engine — detects deleted blocks
+├── merge_cutlists.py      # Builds auto-editor commands with cut ranges
+├── main.py                # CLI orchestrator (full pipeline)
+├── static/
+│   └── index.html         # Web GUI frontend (single-file HTML/CSS/JS)
+└── requirements.txt
 ```
 
 ---
 
-## 🔮 Roadmap
-* [ ] **Preview Mode:** Generate a low-res preview video of the cuts before exporting.
-* [ ] **Word-Level Editing:** Support for deleting individual words within a sentence block.
-* [ ] **Magnetic Cuts:** "Snap" transcript edits to the nearest silence threshold for smoother audio transitions.
-* [ ] **GUI Assistant:** A simple visual tool to highlight and delete text without opening a text editor.
-
----
-
-## 🔧 Troubleshooting
+## Troubleshooting
 
 **Q: The cuts aren't appearing in my video**
-- Make sure you're deleting the entire block (all 3-4 lines including the blank line)
+- Make sure you're deleting the entire block (all 3–4 lines including the blank line)
 - Verify the JSON file matches your video file
 
 **Q: Audio sounds choppy**
-- Try increasing the `--margin` value (e.g., `--margin 0.5`)
+- Try increasing the margin value (e.g., `--margin 0.5`)
 
 **Q: WhisperX isn't installing**
-- Check that you have CUDA/GPU support if using GPU acceleration
+- WhisperX may require Python 3.12: `pip install whisperx` with the correct Python version
 - See the [WhisperX installation guide](https://github.com/m-bain/whisperx#setup)
 
 ---
 
-##📜 License
+## License
+
 **MIT License**
 
-This project wraps and builds upon the incredible work of:
+This project wraps and builds upon:
 
 * [WyattBlue/auto-editor](https://github.com/WyattBlue/auto-editor) (MIT)
 * [m-bain/whisperx](https://github.com/m-bain/whisperx) (BSD-2-Clause)
