@@ -31,6 +31,11 @@ def index():
     return send_from_directory(app.static_folder, "index.html")
 
 
+@app.route("/landing")
+def landing():
+    return send_from_directory(app.static_folder, "landing.html")
+
+
 @app.route("/api/upload", methods=["POST"])
 def upload_file():
     """Handle video file upload via drag-and-drop."""

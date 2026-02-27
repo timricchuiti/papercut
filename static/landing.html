@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PaperCut — Transcript-Based Video Editing</title>
+<link rel="icon" type="image/png" href="/static/favicon.png">
+<link rel="apple-touch-icon" href="/static/icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Courier+Prime:ital,wght@0,400;0,700;1,400&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --blue: #48A8DD;
+  --blue-light: #e8f4fb;
+  --blue-pale: #f2f9fd;
+  --green: #61B87B;
+  --green-light: #eaf6ee;
+  --sunray: #EDAE49;
+  --sunray-light: #fdf5e6;
+  --brick: #D1495B;
+  --brick-light: #fbeaec;
+  --indigo: #003D5B;
+  --ink: #011627;
+  --bg: #FDFFFC;
+  --bg-page: #F7F8F5;
+  --bg-surface: #FFFFFF;
+  --border: #E2E4DE;
+  --border-light: #EEEFE9;
+  --text: #1A1F2B;
+  --text-secondary: #5A6275;
+  --text-dim: #8E94A4;
+  --font-display: 'DM Sans', system-ui, sans-serif;
+  --font-script: 'Courier Prime', 'Courier New', Courier, monospace;
+  --font-mono: 'JetBrains Mono', 'SF Mono', monospace;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+  --shadow-lg: 0 8px 30px rgba(0,0,0,0.10);
+}
+
+[data-theme="dark"] {
+  --blue: #5BB8E8;
+  --blue-light: #1a2e3d;
+  --blue-pale: #141f2b;
+  --green: #6FC88B;
+  --green-light: #1a2d1f;
+  --sunray: #F0BC5E;
+  --sunray-light: #2b2415;
+  --brick: #E05A6C;
+  --brick-light: #2d1a1e;
+  --indigo: #a8c8dc;
+  --ink: #0d1117;
+  --bg: #161b22;
+  --bg-page: #0d1117;
+  --bg-surface: #161b22;
+  --border: #30363d;
+  --border-light: #21262d;
+  --text: #e6edf3;
+  --text-secondary: #8b949e;
+  --text-dim: #6e7681;
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.3);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.4);
+  --shadow-lg: 0 8px 30px rgba(0,0,0,0.5);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--font-display);
+  background: var(--bg-page);
+  color: var(--text);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Nav ── */
+nav {
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  padding: 16px 0;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+nav .nav-inner {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+nav .logo {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--indigo);
+  text-decoration: none;
+}
+nav .logo span { color: var(--blue); }
+.theme-toggle {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  width: 34px;
+  height: 34px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  transition: all 0.15s;
+  line-height: 1;
+}
+.theme-toggle:hover {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+/* ── Sections ── */
+section {
+  padding: 80px 24px;
+}
+.container {
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+/* ── Hero ── */
+.hero {
+  text-align: center;
+  padding: 100px 24px 80px;
+}
+.hero h2 {
+  font-size: 48px;
+  font-weight: 700;
+  line-height: 1.15;
+  color: var(--text);
+  margin-bottom: 20px;
+}
+.hero h2 em {
+  font-style: normal;
+  color: var(--blue);
+}
+.hero p {
+  font-size: 18px;
+  color: var(--text-secondary);
+  max-width: 560px;
+  margin: 0 auto 36px;
+  line-height: 1.6;
+}
+.btn-primary {
+  display: inline-block;
+  background: var(--blue);
+  color: #fff;
+  border: none;
+  padding: 14px 32px;
+  border-radius: var(--radius);
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-decoration: none;
+}
+.btn-primary:hover {
+  filter: brightness(1.1);
+  box-shadow: var(--shadow-md);
+}
+
+/* ── Demo Video ── */
+.demo {
+  background: var(--bg);
+  border-top: 1px solid var(--border-light);
+  border-bottom: 1px solid var(--border-light);
+}
+.demo .container {
+  text-align: center;
+}
+.demo h3 {
+  font-size: 28px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+.demo p {
+  color: var(--text-secondary);
+  margin-bottom: 36px;
+  font-size: 16px;
+}
+.video-placeholder {
+  width: 100%;
+  max-width: 720px;
+  aspect-ratio: 16 / 9;
+  margin: 0 auto;
+  background: var(--bg-surface);
+  border: 2px dashed var(--border);
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--text-dim);
+  font-size: 14px;
+}
+.video-placeholder svg {
+  width: 48px;
+  height: 48px;
+  opacity: 0.4;
+}
+
+/* ── Features ── */
+.features h3 {
+  text-align: center;
+  font-size: 28px;
+  font-weight: 600;
+  margin-bottom: 48px;
+}
+.features-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+}
+.feature-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 32px 24px;
+  text-align: center;
+  transition: box-shadow 0.15s;
+}
+.feature-card:hover {
+  box-shadow: var(--shadow-md);
+}
+.feature-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  margin-bottom: 16px;
+}
+.feature-card h4 {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.feature-card p {
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+/* ── How It Works ── */
+.how-it-works {
+  background: var(--bg);
+  border-top: 1px solid var(--border-light);
+  border-bottom: 1px solid var(--border-light);
+}
+.how-it-works h3 {
+  text-align: center;
+  font-size: 28px;
+  font-weight: 600;
+  margin-bottom: 48px;
+}
+.steps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 32px;
+  position: relative;
+}
+.step {
+  text-align: center;
+}
+.step-number {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--blue);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 16px;
+  margin-bottom: 16px;
+}
+.step h4 {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.step p {
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+/* ── Final CTA ── */
+.final-cta {
+  text-align: center;
+}
+.final-cta h3 {
+  font-size: 32px;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+.final-cta p {
+  color: var(--text-secondary);
+  font-size: 16px;
+  margin-bottom: 32px;
+  max-width: 480px;
+  margin-left: auto;
+  margin-right: auto;
+  line-height: 1.6;
+}
+
+/* ── Footer ── */
+footer {
+  border-top: 1px solid var(--border-light);
+  padding: 24px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+/* ── Modal ── */
+.modal-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.45);
+  z-index: 200;
+  align-items: center;
+  justify-content: center;
+}
+.modal-overlay.active {
+  display: flex;
+}
+.modal {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 40px;
+  max-width: 420px;
+  width: 90%;
+  box-shadow: var(--shadow-lg);
+  position: relative;
+}
+.modal h3 {
+  font-size: 22px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.modal p {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin-bottom: 24px;
+  line-height: 1.5;
+}
+.modal-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  background: none;
+  border: none;
+  font-size: 20px;
+  color: var(--text-dim);
+  cursor: pointer;
+  line-height: 1;
+  padding: 4px;
+}
+.modal-close:hover { color: var(--text); }
+.modal-form {
+  display: flex;
+  gap: 8px;
+}
+.modal-form input {
+  flex: 1;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-family: var(--font-display);
+  font-size: 14px;
+  background: var(--bg-page);
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s;
+}
+.modal-form input:focus {
+  border-color: var(--blue);
+}
+.modal-form input::placeholder {
+  color: var(--text-dim);
+}
+.modal-form button {
+  padding: 12px 20px;
+  background: var(--blue);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.15s;
+  white-space: nowrap;
+}
+.modal-form button:hover { filter: brightness(1.1); }
+.modal-success {
+  display: none;
+  text-align: center;
+  padding: 12px 0;
+  color: var(--green);
+  font-weight: 600;
+  font-size: 15px;
+}
+
+/* ── Responsive ── */
+@media (max-width: 700px) {
+  .hero h2 { font-size: 32px; }
+  .features-grid, .steps { grid-template-columns: 1fr; }
+  section { padding: 60px 24px; }
+}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-inner">
+    <a href="#" class="logo">Paper<span>Cut</span></a>
+    <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" title="Toggle dark mode"></button>
+  </div>
+</nav>
+
+<section class="hero">
+  <div class="container">
+    <h2>Edit video by editing <em>text</em></h2>
+    <p>A lightweight, browser-based tool that does one thing well: transcribe your video, let you cut by deleting text, and export in the format you need. No ecosystem lock-in, no subscription bloat.</p>
+    <button class="btn-primary" onclick="openModal()">Get Early Access</button>
+  </div>
+</section>
+
+<section class="demo">
+  <div class="container">
+    <h3>See it in action</h3>
+    <p>A full walkthrough of the transcript-based editing workflow.</p>
+    <div class="video-placeholder">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+      Demo video coming soon
+    </div>
+  </div>
+</section>
+
+<section class="features">
+  <div class="container">
+    <h3>Why PaperCut?</h3>
+    <div class="features-grid">
+      <div class="feature-card">
+        <div class="feature-icon" style="background: var(--blue-light); color: var(--blue);">
+          <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+        </div>
+        <h4>Transcript Editing</h4>
+        <p>Your video becomes a text document. Delete the sentences you don't want &mdash; no timeline, no learning curve.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon" style="background: var(--green-light); color: var(--green);">
+          <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>
+        </div>
+        <h4>Silence Detection</h4>
+        <p>Automatically finds and removes dead air, ums, and pauses using auto-editor under the hood.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon" style="background: var(--sunray-light); color: var(--sunray);">
+          <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        </div>
+        <h4>Multi-Format Export</h4>
+        <p>Get back an FCPXML, Premiere XML, DaVinci timeline, or a finished video. Your file, your NLE, no lock-in.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="how-it-works">
+  <div class="container">
+    <h3>How it works</h3>
+    <div class="steps">
+      <div class="step">
+        <div class="step-number">1</div>
+        <h4>Upload your video</h4>
+        <p>Drop your video file in the browser. PaperCut transcribes it locally &mdash; nothing leaves your machine.</p>
+      </div>
+      <div class="step">
+        <div class="step-number">2</div>
+        <h4>Edit the transcript</h4>
+        <p>Read through the transcript and delete the blocks you don't want. It's like editing a document.</p>
+      </div>
+      <div class="step">
+        <div class="step-number">3</div>
+        <h4>Export your edit</h4>
+        <p>PaperCut merges your cuts with silence removal and exports to whatever format your editor needs.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="final-cta">
+  <div class="container">
+    <h3>Ready to edit smarter?</h3>
+    <p>One tool, one job, no bloat. Sign up to get notified when PaperCut is ready.</p>
+    <button class="btn-primary" onclick="openModal()">Get Early Access</button>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    PaperCut &mdash; Transcript-based video editing
+  </div>
+</footer>
+
+<!-- Email Signup Modal -->
+<div class="modal-overlay" id="modalOverlay" onclick="closeModalOutside(event)">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal()">&times;</button>
+    <h3>Get early access</h3>
+    <p>Enter your email and we'll let you know when PaperCut is ready.</p>
+    <div class="modal-form" id="signupForm">
+      <input type="email" id="emailInput" placeholder="you@example.com" autocomplete="email">
+      <button onclick="submitEmail()">Sign Up</button>
+    </div>
+    <div class="modal-success" id="signupSuccess">Thanks! We'll be in touch.</div>
+  </div>
+</div>
+
+<script>
+// ── Theme ──
+function getTheme() {
+  return localStorage.getItem("papercut-theme") || "light";
+}
+function applyTheme(theme) {
+  document.documentElement.setAttribute("data-theme", theme);
+  document.getElementById("themeToggle").textContent = theme === "dark" ? "\u2600" : "\u263E";
+}
+function toggleTheme() {
+  const next = getTheme() === "dark" ? "light" : "dark";
+  localStorage.setItem("papercut-theme", next);
+  applyTheme(next);
+}
+applyTheme(getTheme());
+
+// ── Modal ──
+function openModal() {
+  document.getElementById("modalOverlay").classList.add("active");
+  setTimeout(() => document.getElementById("emailInput").focus(), 100);
+}
+function closeModal() {
+  document.getElementById("modalOverlay").classList.remove("active");
+  // Reset form state
+  document.getElementById("signupForm").style.display = "flex";
+  document.getElementById("signupSuccess").style.display = "none";
+  document.getElementById("emailInput").value = "";
+}
+function closeModalOutside(e) {
+  if (e.target === e.currentTarget) closeModal();
+}
+function submitEmail() {
+  const email = document.getElementById("emailInput").value.trim();
+  if (!email || !email.includes("@")) {
+    document.getElementById("emailInput").style.borderColor = "var(--brick)";
+    return;
+  }
+  // Placeholder: log to console. Wire to Mailchimp/Buttondown/Google Form later.
+  console.log("PaperCut signup:", email);
+  document.getElementById("signupForm").style.display = "none";
+  document.getElementById("signupSuccess").style.display = "block";
+}
+
+// Close on Escape
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeModal();
+});
+// Submit on Enter in email field
+document.getElementById("emailInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") submitEmail();
+});
+</script>
+</body>
+</html>
