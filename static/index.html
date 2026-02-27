@@ -748,6 +748,10 @@ video { width: 100%; display: block; max-height: 400px; }
   font-weight: 500;
   color: var(--text-secondary);
 }
+.advanced-grid label > span {
+  display: inline-flex;
+  align-items: center;
+}
 .advanced-grid input {
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -824,6 +828,57 @@ video { width: 100%; display: block; max-height: 400px; }
   align-items: center;
   gap: 8px;
 }
+
+/* ── Search Bar ── */
+.search-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: var(--bg-surface);
+  border: 1px solid var(--blue);
+  border-radius: var(--radius);
+  margin-bottom: 10px;
+  box-shadow: var(--shadow-sm);
+}
+.search-bar input {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 5px 10px;
+  font-family: var(--font-display);
+  font-size: 13px;
+  flex: 1;
+  min-width: 180px;
+  color: var(--text);
+  background: var(--bg-surface);
+}
+.search-bar input:focus { outline: none; border-color: var(--blue); }
+.search-bar .search-count {
+  font-size: 12px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+mark.search-highlight {
+  background: var(--sunray-light);
+  color: var(--text);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+mark.search-highlight.current {
+  background: var(--sunray);
+  color: #000;
+}
+
+/* ── Keyboard Nav & Multi-Select ── */
+.block-card.focused {
+  outline: 2px solid var(--blue);
+  outline-offset: -2px;
+}
+.block-card.selected {
+  background: var(--blue-pale) !important;
+}
+
 </style>
 </head>
 <body>
@@ -993,6 +1048,10 @@ video { width: 100%; display: block; max-height: 400px; }
       <div class="stat-label">Reduction</div>
       <div class="stat-val" id="sumReduction">0%</div>
     </div>
+    <div class="stat-card">
+      <div class="stat-label">Est. Output</div>
+      <div class="stat-val" id="sumEstOutput">0.0s</div>
+    </div>
   </div>
 
 </div><!-- /.container -->
@@ -1006,7 +1065,15 @@ video { width: 100%; display: block; max-height: 400px; }
         <div class="transcript-col-label">Original</div>
         <div class="transcript-col-label label-edit">Edit</div>
       </div>
-      <button class="btn btn-secondary btn-sm" id="undoBtn" onclick="undoLast()" disabled>Undo</button>
+      <div style="display:flex;align-items:center;gap:6px;">
+        <button class="btn btn-secondary btn-sm" onclick="cleanFillers()">Clean Fillers</button>
+        <button class="btn btn-secondary btn-sm" onclick="dedupeTakes()">Dedupe Takes</button>
+        <button class="btn btn-danger-outline btn-sm" onclick="clearAllCuts()">Clear All Cuts</button>
+        <span style="width:1px;height:18px;background:var(--border);margin:0 4px;"></span>
+        <button class="btn btn-secondary btn-sm" id="undoBtn" onclick="undoLast()" disabled>Undo</button>
+        <button class="btn btn-secondary btn-sm" id="redoBtn" onclick="redoLast()" disabled>Redo</button>
+        <span id="autosaveIndicator" style="font-size:11px;color:var(--green);opacity:0;transition:opacity 0.3s;margin-left:6px;">Saved</span>
+      </div>
     </div>
     <div class="transcript-columns">
       <div class="script-page pane-original" id="originalPane"></div>
@@ -1043,12 +1110,20 @@ video { width: 100%; display: block; max-height: 400px; }
     <div class="advanced-card">
       <div class="advanced-title">Advanced Options</div>
       <div class="advanced-grid">
-        <label>Silent speed <span class="info-tip" tabindex="0">i<span class="tip-text">Playback speed for silent/cut sections. Use 99999 to fully remove them, or a number like 8 to speed them up instead.</span></span> <input type="text" id="silentSpeed" placeholder="99999 (cut)"></label>
-        <label>Sounded speed <span class="info-tip" tabindex="0">i<span class="tip-text">Playback speed for sections with audio. Default is 1 (normal speed). Use 1.5 or 2 to speed up the entire sounded portion.</span></span> <input type="text" id="soundedSpeed" placeholder="1"></label>
-        <label>Video codec <span class="info-tip" tabindex="0">i<span class="tip-text">Video codec for re-encoding. Common options: h264, h265/hevc, prores. Leave blank for auto-editor's default.</span></span> <input type="text" id="videoCodec" placeholder="auto"></label>
-        <label>Audio codec <span class="info-tip" tabindex="0">i<span class="tip-text">Audio codec for re-encoding. Common options: aac, pcm_s16le, mp3. Leave blank for auto-editor's default.</span></span> <input type="text" id="audioCodec" placeholder="auto"></label>
-        <label>FFmpeg args <span class="info-tip" tabindex="0">i<span class="tip-text">Extra FFmpeg arguments passed through to the encoder. Example: -crf 22 -preset veryfast for H.264 quality/speed tradeoff.</span></span> <input type="text" id="ffmpegArgs" placeholder="-crf 22 -preset veryfast"></label>
-        <label>Edit method <span class="info-tip" tabindex="0">i<span class="tip-text">auto-editor's --edit flag. Controls what gets detected as silence. Examples: audio:threshold=4%, motion:threshold=2%, or combine with audio:or:motion.</span></span> <input type="text" id="editMethod" placeholder="audio:threshold=4%"></label>
+        <label><span>Silent speed <span class="info-tip" tabindex="0">i<span class="tip-text">Playback speed for silent/cut sections. Use 99999 to fully remove them, or a number like 8 to speed them up instead.</span></span></span> <input type="text" id="silentSpeed" placeholder="99999 (cut)"></label>
+        <label><span>Sounded speed <span class="info-tip" tabindex="0">i<span class="tip-text">Playback speed for sections with audio. Default is 1 (normal speed). Use 1.5 or 2 to speed up the entire sounded portion.</span></span></span> <input type="text" id="soundedSpeed" placeholder="1"></label>
+        <label><span>Video codec <span class="info-tip" tabindex="0">i<span class="tip-text">Video codec for re-encoding. Common options: h264, h265/hevc, prores. Leave blank for auto-editor's default.</span></span></span> <input type="text" id="videoCodec" placeholder="auto"></label>
+        <label><span>Audio codec <span class="info-tip" tabindex="0">i<span class="tip-text">Audio codec for re-encoding. Common options: aac, pcm_s16le, mp3. Leave blank for auto-editor's default.</span></span></span> <input type="text" id="audioCodec" placeholder="auto"></label>
+        <label><span>FFmpeg args <span class="info-tip" tabindex="0">i<span class="tip-text">Extra FFmpeg arguments passed through to the encoder. Example: -crf 22 -preset veryfast for H.264 quality/speed tradeoff.</span></span></span> <input type="text" id="ffmpegArgs" placeholder="-crf 22 -preset veryfast"></label>
+        <label><span>Edit method <span class="info-tip" tabindex="0">i<span class="tip-text">auto-editor's --edit flag. Controls what gets detected as silence. Examples: audio:threshold=4%, motion:threshold=2%, or combine with audio:or:motion.</span></span></span> <input type="text" id="editMethod" placeholder="audio:threshold=4%"></label>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:16px;padding-top:14px;border-top:1px solid var(--border-light);">
+        <span style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:1.2px;color:var(--text-dim);">Preset</span>
+        <select id="presetSelect" onchange="loadPreset()" style="min-width:140px;border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px;font-family:var(--font-display);background:var(--bg-surface);color:var(--text);">
+          <option value="">— None —</option>
+        </select>
+        <button class="btn btn-secondary btn-sm" onclick="savePreset()">Save Preset</button>
+        <button class="btn btn-danger-outline btn-sm" onclick="deletePreset()">Delete</button>
       </div>
     </div>
   </div>
@@ -1061,7 +1136,8 @@ video { width: 100%; display: block; max-height: 400px; }
 <script>
 // ── State ──
 let blocks = [];       // {id, index, start, end, text, originalText, deleted}
-let undoStack = [];    // [{type: 'cut'|'edit', id, prevText?}]
+let undoStack = [];    // [{type: 'cut'|'edit'|'restore', id, prevText?}]
+let redoStack = [];
 let videoPath = "";
 let srtPath = "";
 let origSrtPath = "";
@@ -1069,6 +1145,16 @@ let jsonPath = "";
 let currentHighlight = -1;
 let deletedRanges = [];
 let scrollSyncing = false;
+
+// Keyboard nav & multi-select state
+let focusedBlockId = null;
+let selectedBlocks = new Set();
+let lastClickedBlockId = null;
+
+// Search state
+let searchOpen = false;
+let searchMatches = []; // [{blockId, markEl}]
+let currentMatchIndex = -1;
 
 // ── DOM refs ──
 const $dropZone = document.getElementById("dropZone");
@@ -1087,8 +1173,10 @@ const $exportSection = document.getElementById("export-section");
 const $marginSlider = document.getElementById("marginSlider");
 const $marginVal = document.getElementById("marginVal");
 const $undoBtn = document.getElementById("undoBtn");
+const $redoBtn = document.getElementById("redoBtn");
 const $summaryBar = document.getElementById("summary-bar");
 const $exportResult = document.getElementById("export-result");
+const $autosaveIndicator = document.getElementById("autosaveIndicator");
 
 // ── Utilities ──
 let _debounceTimers = {};
@@ -1316,7 +1404,15 @@ function loadTranscript() {
         deleted: false,
       }));
       undoStack = [];
+      redoStack = [];
       $undoBtn.disabled = true;
+      $redoBtn.disabled = true;
+      focusedBlockId = null;
+      selectedBlocks.clear();
+
+      // Check for autosave before rendering
+      checkAutosave();
+
       renderTranscript();
       $transcriptSection.classList.remove("hidden");
       $exportSection.classList.remove("hidden");
@@ -1377,7 +1473,11 @@ function renderEditPane() {
 
   for (const b of blocks) {
     const card = document.createElement("div");
-    card.className = "block-card" + (b.deleted ? " is-cut" : "");
+    let cls = "block-card";
+    if (b.deleted) cls += " is-cut";
+    if (b.id === focusedBlockId) cls += " focused";
+    if (selectedBlocks.has(b.id)) cls += " selected";
+    card.className = cls;
     card.dataset.id = b.id;
     card.dataset.start = b.start;
     card.dataset.end = b.end;
@@ -1444,7 +1544,10 @@ function bindTextEditing(el) {
     b.text = el.textContent.trim();
     if (b.text !== textAtFocus) {
       undoStack.push({ type: "edit", id: b.id, prevText: textAtFocus });
+      redoStack = [];
       $undoBtn.disabled = false;
+      $redoBtn.disabled = true;
+      triggerAutosave();
     }
     // Final sync (no debounce)
     updateOriginalBlock(id);
@@ -1469,7 +1572,12 @@ function bindEditPaneEvents() {
   $editPane.querySelectorAll("[data-restore]").forEach(btn => {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
-      restoreBlock(parseInt(btn.dataset.restore));
+      const id = parseInt(btn.dataset.restore);
+      restoreBlock(id);
+      undoStack.push({ type: "restore", id });
+      redoStack = [];
+      $undoBtn.disabled = false;
+      $redoBtn.disabled = true;
     });
   });
 
@@ -1483,10 +1591,19 @@ function bindEditPaneEvents() {
     bindTextEditing(el);
   });
 
-  // Click card to seek (but not on buttons or editable text)
+  // Click card: focus/select + seek (but not on buttons or editable text)
   $editPane.querySelectorAll(".block-card").forEach(card => {
     card.addEventListener("click", (e) => {
       if (e.target.closest("button") || e.target.closest('[contenteditable="true"]')) return;
+      const id = parseInt(card.dataset.id);
+
+      if (e.shiftKey && lastClickedBlockId !== null) {
+        selectRange(lastClickedBlockId, id);
+      } else {
+        selectedBlocks.clear();
+        setFocus(id);
+        lastClickedBlockId = id;
+      }
       seekTo(parseFloat(card.dataset.start));
     });
   });
@@ -1550,6 +1667,10 @@ function updateEditBlock(id) {
     card.querySelector("[data-restore]").addEventListener("click", (e) => {
       e.stopPropagation();
       restoreBlock(b.id);
+      undoStack.push({ type: "restore", id: b.id });
+      redoStack = [];
+      $undoBtn.disabled = false;
+      $redoBtn.disabled = true;
     });
   } else {
     card.innerHTML = `
@@ -1580,12 +1701,20 @@ function updateEditBlock(id) {
 
 // ── Scroll Sync ──
 function bindScrollSync() {
+  let scrollSource = null; // which pane initiated the sync
+  let scrollTimer = null;
+
   function syncScroll(source, target) {
-    if (scrollSyncing) return;
-    scrollSyncing = true;
+    // If the other pane started the sync, ignore this event
+    if (scrollSource && scrollSource !== source) return;
+    scrollSource = source;
+
     const pct = source.scrollTop / (source.scrollHeight - source.clientHeight || 1);
     target.scrollTop = pct * (target.scrollHeight - target.clientHeight);
-    requestAnimationFrame(() => { scrollSyncing = false; });
+
+    // Release the lock after scrolling settles
+    clearTimeout(scrollTimer);
+    scrollTimer = setTimeout(() => { scrollSource = null; }, 100);
   }
 
   $originalPane.addEventListener("scroll", () => {
@@ -1602,11 +1731,15 @@ function cutBlock(id) {
   if (!b || b.deleted) return;
   b.deleted = true;
   undoStack.push({ type: "cut", id: b.id });
+  redoStack = [];
   $undoBtn.disabled = false;
+  $redoBtn.disabled = true;
 
   updateEditBlock(id);
   updateOriginalBlock(id);
   updateSummary();
+  triggerAutosave();
+  if (searchOpen) performSearch();
 }
 
 function restoreBlock(id) {
@@ -1617,6 +1750,8 @@ function restoreBlock(id) {
   updateEditBlock(id);
   updateOriginalBlock(id);
   updateSummary();
+  triggerAutosave();
+  if (searchOpen) performSearch();
 }
 
 function undoLast() {
@@ -1625,16 +1760,80 @@ function undoLast() {
   $undoBtn.disabled = undoStack.length === 0;
 
   if (action.type === "cut") {
-    restoreBlock(action.id);
+    const b = blocks.find(x => x.id === action.id);
+    if (b) {
+      b.deleted = false;
+      redoStack.push({ type: "cut", id: action.id });
+      $redoBtn.disabled = false;
+      updateEditBlock(action.id);
+      updateOriginalBlock(action.id);
+      updateSummary();
+    }
+  } else if (action.type === "restore") {
+    const b = blocks.find(x => x.id === action.id);
+    if (b) {
+      b.deleted = true;
+      redoStack.push({ type: "restore", id: action.id });
+      $redoBtn.disabled = false;
+      updateEditBlock(action.id);
+      updateOriginalBlock(action.id);
+      updateSummary();
+    }
   } else if (action.type === "edit") {
     const b = blocks.find(x => x.id === action.id);
     if (b) {
+      const currentText = b.text;
       b.text = action.prevText;
+      redoStack.push({ type: "edit", id: action.id, prevText: currentText });
+      $redoBtn.disabled = false;
       updateEditBlock(action.id);
       updateOriginalBlock(action.id);
       updateSummary();
     }
   }
+  triggerAutosave();
+  if (searchOpen) performSearch();
+}
+
+function redoLast() {
+  if (!redoStack.length) return;
+  const action = redoStack.pop();
+  $redoBtn.disabled = redoStack.length === 0;
+
+  if (action.type === "cut") {
+    const b = blocks.find(x => x.id === action.id);
+    if (b) {
+      b.deleted = true;
+      undoStack.push({ type: "cut", id: action.id });
+      $undoBtn.disabled = false;
+      updateEditBlock(action.id);
+      updateOriginalBlock(action.id);
+      updateSummary();
+    }
+  } else if (action.type === "restore") {
+    const b = blocks.find(x => x.id === action.id);
+    if (b) {
+      b.deleted = false;
+      undoStack.push({ type: "restore", id: action.id });
+      $undoBtn.disabled = false;
+      updateEditBlock(action.id);
+      updateOriginalBlock(action.id);
+      updateSummary();
+    }
+  } else if (action.type === "edit") {
+    const b = blocks.find(x => x.id === action.id);
+    if (b) {
+      const currentText = b.text;
+      b.text = action.prevText;
+      undoStack.push({ type: "edit", id: action.id, prevText: currentText });
+      $undoBtn.disabled = false;
+      updateEditBlock(action.id);
+      updateOriginalBlock(action.id);
+      updateSummary();
+    }
+  }
+  triggerAutosave();
+  if (searchOpen) performSearch();
 }
 
 // ── Summary ──
@@ -1643,13 +1842,14 @@ function updateSummary() {
   const removed = blocks.filter(b => b.deleted).length;
   const edited = blocks.filter(b => !b.deleted && b.text !== b.originalText).length;
   const cutDuration = blocks.filter(b => b.deleted).reduce((s, b) => s + (b.end - b.start), 0);
-  const totalDuration = blocks.length ? blocks[blocks.length - 1].end : 0;
+  const totalDuration = blocks.length ? Math.max(...blocks.map(b => b.end)) : 0;
   const pct = totalDuration > 0 ? ((cutDuration / totalDuration) * 100).toFixed(1) : "0.0";
 
   document.getElementById("sumTotal").textContent = total;
   document.getElementById("sumRemoved").textContent = removed + (edited > 0 ? ` (+${edited} edited)` : "");
   document.getElementById("sumTimeCut").textContent = fmt(cutDuration);
   document.getElementById("sumReduction").textContent = pct + "%";
+  document.getElementById("sumEstOutput").textContent = fmt(Math.max(0, totalDuration - cutDuration));
 }
 
 // ── Video sync ──
@@ -1865,6 +2065,7 @@ function startExport() {
       $exportResult.className = "success";
       $exportResult.textContent = `${result.message}\n\nCommand: ${result.command}`;
       if (result.stdout) $exportResult.textContent += `\n\n${result.stdout}`;
+      clearAutosave();
     } else {
       $exportResult.className = "error";
       $exportResult.textContent = `Export failed: ${result.error}\n\nCommand: ${result.command || "N/A"}`;
@@ -1899,14 +2100,510 @@ function toggleTheme() {
 
 applyTheme(getTheme());
 
+// ── Feature 3: Export Presets ──
+const PRESETS_KEY = "papercut-export-presets";
+
+function getPresets() {
+  try { return JSON.parse(localStorage.getItem(PRESETS_KEY)) || []; }
+  catch { return []; }
+}
+
+function populatePresetDropdown() {
+  const sel = document.getElementById("presetSelect");
+  const presets = getPresets();
+  sel.innerHTML = '<option value="">— None —</option>';
+  presets.forEach((p, i) => {
+    const opt = document.createElement("option");
+    opt.value = i;
+    opt.textContent = p.name;
+    sel.appendChild(opt);
+  });
+}
+
+function loadPreset() {
+  const sel = document.getElementById("presetSelect");
+  if (sel.value === "") return;
+  const presets = getPresets();
+  const p = presets[parseInt(sel.value)];
+  if (!p) return;
+  if (p.exportFormat) document.getElementById("exportFormat").value = p.exportFormat;
+  if (p.margin != null) { $marginSlider.value = parseFloat(p.margin); $marginVal.textContent = parseFloat(p.margin).toFixed(2) + "s"; }
+  if (p.silentSpeed != null) document.getElementById("silentSpeed").value = p.silentSpeed;
+  if (p.soundedSpeed != null) document.getElementById("soundedSpeed").value = p.soundedSpeed;
+  if (p.videoCodec != null) document.getElementById("videoCodec").value = p.videoCodec;
+  if (p.audioCodec != null) document.getElementById("audioCodec").value = p.audioCodec;
+  if (p.ffmpegArgs != null) document.getElementById("ffmpegArgs").value = p.ffmpegArgs;
+  if (p.editMethod != null) document.getElementById("editMethod").value = p.editMethod;
+}
+
+function savePreset() {
+  const name = prompt("Preset name:");
+  if (!name) return;
+  const preset = {
+    name,
+    exportFormat: document.getElementById("exportFormat").value,
+    margin: $marginSlider.value,
+    silentSpeed: document.getElementById("silentSpeed").value.trim(),
+    soundedSpeed: document.getElementById("soundedSpeed").value.trim(),
+    videoCodec: document.getElementById("videoCodec").value.trim(),
+    audioCodec: document.getElementById("audioCodec").value.trim(),
+    ffmpegArgs: document.getElementById("ffmpegArgs").value.trim(),
+    editMethod: document.getElementById("editMethod").value.trim(),
+  };
+  const presets = getPresets();
+  const existing = presets.findIndex(p => p.name === name);
+  if (existing >= 0) presets[existing] = preset;
+  else presets.push(preset);
+  localStorage.setItem(PRESETS_KEY, JSON.stringify(presets));
+  populatePresetDropdown();
+  document.getElementById("presetSelect").value = presets.findIndex(p => p.name === name);
+}
+
+function deletePreset() {
+  const sel = document.getElementById("presetSelect");
+  if (sel.value === "") return;
+  const presets = getPresets();
+  presets.splice(parseInt(sel.value), 1);
+  localStorage.setItem(PRESETS_KEY, JSON.stringify(presets));
+  populatePresetDropdown();
+}
+
+populatePresetDropdown();
+
+// ── Feature 4: Auto-save ──
+let _autosaveTimer = null;
+
+function getAutosaveKey() {
+  const filename = videoPath.split("/").pop() || videoPath;
+  return "papercut-autosave-" + filename;
+}
+
+function triggerAutosave() {
+  clearTimeout(_autosaveTimer);
+  _autosaveTimer = setTimeout(autosave, 500);
+}
+
+function autosave() {
+  if (!videoPath || !blocks.length) return;
+  const data = {
+    videoPath,
+    timestamp: Date.now(),
+    blocks: blocks.map(b => ({ id: b.id, index: b.index, start: b.start, end: b.end, text: b.text, originalText: b.originalText, deleted: b.deleted })),
+  };
+  localStorage.setItem(getAutosaveKey(), JSON.stringify(data));
+  // Flash "Saved" indicator
+  $autosaveIndicator.style.opacity = "1";
+  setTimeout(() => { $autosaveIndicator.style.opacity = "0"; }, 1500);
+}
+
+function checkAutosave() {
+  if (!videoPath) return;
+  const raw = localStorage.getItem(getAutosaveKey());
+  if (!raw) return;
+  try {
+    const data = JSON.parse(raw);
+    if (!data.blocks || !data.blocks.length) return;
+    const ago = Date.now() - data.timestamp;
+    const agoText = ago < 60000 ? "less than a minute ago"
+      : ago < 3600000 ? Math.floor(ago / 60000) + " minutes ago"
+      : Math.floor(ago / 3600000) + " hours ago";
+    const cutCount = data.blocks.filter(b => b.deleted).length;
+    const editedCount = data.blocks.filter(b => !b.deleted && b.text !== b.originalText).length;
+    const msg = `Found auto-saved session from ${agoText}:\n• ${cutCount} blocks cut\n• ${editedCount} blocks edited\n\nRestore this session?`;
+    if (confirm(msg)) {
+      // Restore blocks state
+      for (const saved of data.blocks) {
+        const b = blocks.find(x => x.id === saved.id);
+        if (!b) continue;
+        b.text = saved.text;
+        b.originalText = saved.originalText;
+        b.deleted = saved.deleted;
+      }
+    }
+  } catch {}
+}
+
+function clearAutosave() {
+  if (videoPath) localStorage.removeItem(getAutosaveKey());
+}
+
+// ── Feature 5: Search/Find ──
+function openSearch() {
+  if (searchOpen) { document.getElementById("searchInput").focus(); return; }
+  if ($transcriptSection.classList.contains("hidden")) return;
+  searchOpen = true;
+
+  const bar = document.createElement("div");
+  bar.className = "search-bar";
+  bar.id = "searchBar";
+  bar.innerHTML = `
+    <input type="text" id="searchInput" placeholder="Find in transcript\u2026" autocomplete="off">
+    <span class="search-count" id="searchCount">0/0</span>
+    <button class="btn btn-secondary btn-sm" onclick="searchNav(-1)">\u25B2</button>
+    <button class="btn btn-secondary btn-sm" onclick="searchNav(1)">\u25BC</button>
+    <button class="btn btn-secondary btn-sm" onclick="closeSearch()">\u2715</button>
+  `;
+  $transcriptSection.insertBefore(bar, $transcriptSection.firstChild);
+
+  const input = document.getElementById("searchInput");
+  input.addEventListener("input", () => performSearch());
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); searchNav(e.shiftKey ? -1 : 1); }
+    if (e.key === "Escape") { e.preventDefault(); closeSearch(); }
+  });
+  input.focus();
+}
+
+function closeSearch() {
+  searchOpen = false;
+  searchMatches = [];
+  currentMatchIndex = -1;
+  const bar = document.getElementById("searchBar");
+  if (bar) bar.remove();
+  // Strip all <mark> tags
+  $editPane.querySelectorAll("mark.search-highlight").forEach(m => {
+    const parent = m.parentNode;
+    parent.replaceChild(document.createTextNode(m.textContent), m);
+    parent.normalize();
+  });
+}
+
+function performSearch() {
+  const input = document.getElementById("searchInput");
+  if (!input) return;
+  const query = input.value.trim().toLowerCase();
+
+  // Clear previous highlights
+  $editPane.querySelectorAll("mark.search-highlight").forEach(m => {
+    const parent = m.parentNode;
+    parent.replaceChild(document.createTextNode(m.textContent), m);
+    parent.normalize();
+  });
+  searchMatches = [];
+  currentMatchIndex = -1;
+
+  if (!query) {
+    document.getElementById("searchCount").textContent = "0/0";
+    return;
+  }
+
+  // Walk text nodes in .block-text elements (edit pane only, non-cut)
+  $editPane.querySelectorAll(".block-card:not(.is-cut) .block-text").forEach(textEl => {
+    const blockId = parseInt(textEl.closest(".block-card").dataset.id);
+    highlightTextNode(textEl, query, blockId);
+  });
+
+  document.getElementById("searchCount").textContent = searchMatches.length > 0
+    ? `0/${searchMatches.length}` : "0/0";
+
+  if (searchMatches.length > 0) {
+    currentMatchIndex = 0;
+    searchMatches[0].markEl.classList.add("current");
+    document.getElementById("searchCount").textContent = `1/${searchMatches.length}`;
+    searchMatches[0].markEl.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+}
+
+function highlightTextNode(el, query, blockId) {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const nodesToProcess = [];
+  while (walker.nextNode()) {
+    nodesToProcess.push(walker.currentNode);
+  }
+  for (const node of nodesToProcess) {
+    const text = node.textContent.toLowerCase();
+    let idx = text.indexOf(query);
+    if (idx === -1) continue;
+
+    const frag = document.createDocumentFragment();
+    let lastIdx = 0;
+    const original = node.textContent;
+
+    while (idx !== -1) {
+      if (idx > lastIdx) frag.appendChild(document.createTextNode(original.slice(lastIdx, idx)));
+      const mark = document.createElement("mark");
+      mark.className = "search-highlight";
+      mark.textContent = original.slice(idx, idx + query.length);
+      frag.appendChild(mark);
+      searchMatches.push({ blockId, markEl: mark });
+      lastIdx = idx + query.length;
+      idx = text.indexOf(query, lastIdx);
+    }
+    if (lastIdx < original.length) frag.appendChild(document.createTextNode(original.slice(lastIdx)));
+    node.parentNode.replaceChild(frag, node);
+  }
+}
+
+function searchNav(dir) {
+  if (!searchMatches.length) return;
+  if (currentMatchIndex >= 0) searchMatches[currentMatchIndex].markEl.classList.remove("current");
+  currentMatchIndex = (currentMatchIndex + dir + searchMatches.length) % searchMatches.length;
+  searchMatches[currentMatchIndex].markEl.classList.add("current");
+  searchMatches[currentMatchIndex].markEl.scrollIntoView({ behavior: "smooth", block: "center" });
+  document.getElementById("searchCount").textContent = `${currentMatchIndex + 1}/${searchMatches.length}`;
+}
+
+// ── Feature 6: Keyboard Navigation & Multi-Select ──
+function setFocus(id) {
+  // Remove old focus
+  $editPane.querySelectorAll(".block-card.focused").forEach(c => c.classList.remove("focused"));
+  focusedBlockId = id;
+  const card = $editPane.querySelector(`[data-id="${id}"]`);
+  if (card) {
+    card.classList.add("focused");
+    // Ensure visible
+    const rect = card.getBoundingClientRect();
+    const cRect = $editPane.getBoundingClientRect();
+    if (rect.top < cRect.top || rect.bottom > cRect.bottom) {
+      card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }
+  updateSelectionDisplay();
+}
+
+function moveFocus(direction) {
+  const cards = Array.from($editPane.querySelectorAll(".block-card"));
+  if (!cards.length) return;
+  const ids = cards.map(c => parseInt(c.dataset.id));
+
+  if (focusedBlockId === null) {
+    setFocus(ids[direction > 0 ? 0 : ids.length - 1]);
+    return;
+  }
+
+  const curIdx = ids.indexOf(focusedBlockId);
+  if (curIdx === -1) { setFocus(ids[0]); return; }
+  const nextIdx = curIdx + direction;
+  if (nextIdx < 0 || nextIdx >= ids.length) return;
+  selectedBlocks.clear();
+  setFocus(ids[nextIdx]);
+}
+
+function selectRange(fromId, toId) {
+  const cards = Array.from($editPane.querySelectorAll(".block-card"));
+  const ids = cards.map(c => parseInt(c.dataset.id));
+  const fromIdx = ids.indexOf(fromId);
+  const toIdx = ids.indexOf(toId);
+  if (fromIdx === -1 || toIdx === -1) return;
+  const lo = Math.min(fromIdx, toIdx);
+  const hi = Math.max(fromIdx, toIdx);
+  selectedBlocks.clear();
+  for (let i = lo; i <= hi; i++) selectedBlocks.add(ids[i]);
+  setFocus(toId);
+}
+
+function updateSelectionDisplay() {
+  $editPane.querySelectorAll(".block-card.selected").forEach(c => c.classList.remove("selected"));
+  for (const id of selectedBlocks) {
+    const card = $editPane.querySelector(`[data-id="${id}"]`);
+    if (card) card.classList.add("selected");
+  }
+}
+
+function cutSelectedBlocks() {
+  const toCut = selectedBlocks.size > 0 ? [...selectedBlocks] : (focusedBlockId !== null ? [focusedBlockId] : []);
+  if (!toCut.length) return;
+
+  // Find next focus target
+  const cards = Array.from($editPane.querySelectorAll(".block-card"));
+  const ids = cards.map(c => parseInt(c.dataset.id));
+  const lastCutIdx = Math.max(...toCut.map(id => ids.indexOf(id)));
+  let nextFocusId = null;
+  for (let i = lastCutIdx + 1; i < ids.length; i++) {
+    if (!toCut.includes(ids[i])) { nextFocusId = ids[i]; break; }
+  }
+  if (nextFocusId === null) {
+    for (let i = lastCutIdx - 1; i >= 0; i--) {
+      if (!toCut.includes(ids[i])) { nextFocusId = ids[i]; break; }
+    }
+  }
+
+  for (const id of toCut) cutBlock(id);
+  selectedBlocks.clear();
+  if (nextFocusId !== null) setFocus(nextFocusId);
+}
+
+// ── Clear All Cuts ──
+function clearAllCuts() {
+  const cutBlocks = blocks.filter(b => b.deleted);
+  const editedBlocks = blocks.filter(b => !b.deleted && b.text !== b.originalText);
+  if (!cutBlocks.length && !editedBlocks.length) return;
+
+  const parts = [];
+  if (cutBlocks.length) parts.push(`${cutBlocks.length} cut`);
+  if (editedBlocks.length) parts.push(`${editedBlocks.length} edited`);
+  if (!confirm(`Restore all blocks (${parts.join(", ")}) to original state?`)) return;
+
+  for (const b of blocks) {
+    if (b.deleted || b.text !== b.originalText) {
+      b.deleted = false;
+      b.text = b.originalText;
+    }
+  }
+  undoStack = [];
+  redoStack = [];
+  $undoBtn.disabled = true;
+  $redoBtn.disabled = true;
+  renderTranscript();
+  updateSummary();
+  triggerAutosave();
+}
+
+// ── Auto-Edit: Clean Fillers ──
+const FILLER_PATTERNS = [
+  /^\s*(um+|uh+|uh-huh|mm+|hmm+|mhm+|hm+|ah+|eh+|oh+)\s*[.!?,]*\s*$/i,
+  /^\s*(you know|i mean|like|so|right|okay|well|yeah|yep|nah)\s*[.!?,]*\s*$/i,
+];
+
+function isFillerBlock(text) {
+  const trimmed = text.trim().replace(/[.!?,;:\s]+$/g, "").trim();
+  if (!trimmed) return true; // empty block
+  return FILLER_PATTERNS.some(rx => rx.test(trimmed));
+}
+
+function cleanFillers() {
+  const toCut = blocks.filter(b => !b.deleted && isFillerBlock(b.text));
+  if (!toCut.length) { alert("No filler blocks found."); return; }
+  if (!confirm(`Cut ${toCut.length} filler block${toCut.length > 1 ? "s" : ""}?`)) return;
+
+  for (const b of toCut) {
+    b.deleted = true;
+    undoStack.push({ type: "cut", id: b.id });
+    updateEditBlock(b.id);
+    updateOriginalBlock(b.id);
+  }
+  redoStack = [];
+  $undoBtn.disabled = false;
+  $redoBtn.disabled = true;
+  updateSummary();
+  triggerAutosave();
+  if (searchOpen) performSearch();
+}
+
+// ── Auto-Edit: Dedupe Takes ──
+function textSimilarity(a, b) {
+  const wordsA = a.toLowerCase().replace(/[^\w\s]/g, "").split(/\s+/).filter(Boolean);
+  const wordsB = b.toLowerCase().replace(/[^\w\s]/g, "").split(/\s+/).filter(Boolean);
+  if (!wordsA.length || !wordsB.length) return 0;
+
+  const setA = new Set(wordsA);
+  const setB = new Set(wordsB);
+  const intersection = [...setA].filter(w => setB.has(w)).length;
+  const union = new Set([...setA, ...setB]).size;
+  return union > 0 ? intersection / union : 0;
+}
+
+function dedupeTakes() {
+  const SIMILARITY_THRESHOLD = 0.6;
+  const toCut = [];
+
+  // Walk non-deleted blocks in order, find runs of similar consecutive blocks
+  const active = blocks.filter(b => !b.deleted);
+  let i = 0;
+  while (i < active.length) {
+    // Start a run from block i
+    let runEnd = i;
+    while (runEnd + 1 < active.length &&
+           textSimilarity(active[i].text, active[runEnd + 1].text) >= SIMILARITY_THRESHOLD) {
+      runEnd++;
+    }
+
+    if (runEnd > i) {
+      // Found a run of similar blocks from i to runEnd — cut all but the last
+      for (let j = i; j < runEnd; j++) {
+        toCut.push(active[j]);
+      }
+    }
+    i = runEnd + 1;
+  }
+
+  if (!toCut.length) { alert("No repeated takes found."); return; }
+  if (!confirm(`Found ${toCut.length} repeated take${toCut.length > 1 ? "s" : ""} to cut (keeping last of each run). Proceed?`)) return;
+
+  for (const b of toCut) {
+    b.deleted = true;
+    undoStack.push({ type: "cut", id: b.id });
+    updateEditBlock(b.id);
+    updateOriginalBlock(b.id);
+  }
+  redoStack = [];
+  $undoBtn.disabled = false;
+  $redoBtn.disabled = true;
+  updateSummary();
+  triggerAutosave();
+  if (searchOpen) performSearch();
+}
+
 // ── Keyboard shortcuts ──
 document.addEventListener("keydown", (e) => {
+  const inInput = e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.isContentEditable;
+
+  // Ctrl+Z / Cmd+Z — Undo
   if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
-    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.isContentEditable) return;
+    if (inInput) return;
     e.preventDefault();
     undoLast();
+    return;
+  }
+
+  // Ctrl+Shift+Z / Cmd+Shift+Z — Redo
+  if ((e.ctrlKey || e.metaKey) && (e.key === "Z" || (e.key === "z" && e.shiftKey))) {
+    if (inInput) return;
+    e.preventDefault();
+    redoLast();
+    return;
+  }
+
+  // Ctrl+Y / Cmd+Y — Redo (alternative)
+  if ((e.ctrlKey || e.metaKey) && e.key === "y") {
+    if (inInput) return;
+    e.preventDefault();
+    redoLast();
+    return;
+  }
+
+  // Ctrl+F / Cmd+F — Search
+  if ((e.ctrlKey || e.metaKey) && e.key === "f") {
+    if (!$transcriptSection.classList.contains("hidden")) {
+      e.preventDefault();
+      openSearch();
+      return;
+    }
+  }
+
+  // Escape — close search
+  if (e.key === "Escape" && searchOpen) {
+    closeSearch();
+    return;
+  }
+
+  // Arrow keys and Delete — keyboard nav (only when not in input)
+  if (inInput || e.target.closest("input,textarea,select")) return;
+  if ($transcriptSection.classList.contains("hidden")) return;
+
+  if (e.key === "ArrowUp") {
+    e.preventDefault();
+    moveFocus(-1);
+  } else if (e.key === "ArrowDown") {
+    e.preventDefault();
+    moveFocus(1);
+  } else if (e.key === "Delete" || e.key === "Backspace") {
+    e.preventDefault();
+    cutSelectedBlocks();
   }
 });
+
+// ── Strip search highlights on contenteditable focus ──
+$editPane.addEventListener("focusin", (e) => {
+  if (e.target.isContentEditable && searchOpen) {
+    e.target.querySelectorAll("mark.search-highlight").forEach(m => {
+      const parent = m.parentNode;
+      parent.replaceChild(document.createTextNode(m.textContent), m);
+      parent.normalize();
+    });
+  }
+});
+
 </script>
 </body>
 </html>

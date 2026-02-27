@@ -175,23 +175,36 @@ def find_deleted_ranges(original_srt, edited_srt, whisper_json):
     edited_blocks = parse_srt(edited_srt)
     whisper_data = load_whisper_json(whisper_json)
 
-    # Count occurrences of each normalized text in the edited SRT
-    from collections import Counter
-    edited_counts = Counter(_normalize_text(b.text) for b in edited_blocks)
+    # Build a list of edited blocks available for matching (consumed as matched).
+    # Each entry: {norm_text, start, consumed}
+    edited_pool = [
+        {"norm": _normalize_text(b.text), "start": b.start, "consumed": False}
+        for b in edited_blocks
+    ]
 
-    # Walk through original blocks in order. For each normalized text,
-    # "spend" edited counts first (those are kept), then the rest are deletions.
-    remaining_edited = dict(edited_counts)
+    # For each original block, find the best match in the edited pool by
+    # normalized text + timestamp proximity.  This correctly handles duplicate
+    # text (e.g. the same sentence spoken twice) — the closest-in-time edited
+    # block is consumed, and the other instance is recognized as deleted.
     deleted_blocks = []
     for block in original_blocks:
         norm = _normalize_text(block.text)
         if not norm:
             continue
-        if remaining_edited.get(norm, 0) > 0:
-            # This block is still present in edited — consume one count
-            remaining_edited[norm] -= 1
+
+        # Find all unconsumed edited blocks with matching text
+        candidates = [
+            (i, abs(e["start"] - block.start))
+            for i, e in enumerate(edited_pool)
+            if not e["consumed"] and e["norm"] == norm
+        ]
+
+        if candidates:
+            # Pick the closest by timestamp
+            best_idx = min(candidates, key=lambda c: c[1])[0]
+            edited_pool[best_idx]["consumed"] = True
         else:
-            # This block was deleted
+            # No match — this block was deleted
             deleted_blocks.append(block)
 
     if not deleted_blocks:
