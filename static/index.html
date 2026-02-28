@@ -907,13 +907,13 @@ mark.search-highlight.current {
         <div class="settings-grid">
           <div class="settings-field full-width">
             <label>Transcription engine</label>
-            <select id="settTranscriptionEngine">
+            <select id="settTranscriptionEngine" onchange="updateEngineFields()">
               <option value="whisperx">WhisperX</option>
               <option value="crisperwhisper">CrisperWhisper (verbatim)</option>
             </select>
             <span class="hint">CrisperWhisper preserves filler words (um, uh), stutters, and false starts</span>
           </div>
-          <div class="settings-field">
+          <div class="settings-field" id="settWhisperModelField">
             <label>WhisperX model</label>
             <select id="settWhisperModel">
               <option value="tiny">tiny</option>
@@ -1950,6 +1950,7 @@ function applySettings() {
 
   // Populate settings form
   document.getElementById("settTranscriptionEngine").value = s.transcriptionEngine;
+  updateEngineFields();
   document.getElementById("settWhisperModel").value = s.whisperModel;
   document.getElementById("settLanguage").value = s.language;
   document.getElementById("settExportFormat").value = s.exportFormat;
@@ -2003,6 +2004,12 @@ function saveSettings() {
 function resetSettings() {
   localStorage.removeItem(SETTINGS_KEY);
   applySettings();
+}
+
+function updateEngineFields() {
+  const engine = document.getElementById("settTranscriptionEngine").value;
+  const whisperModelField = document.getElementById("settWhisperModelField");
+  whisperModelField.style.display = engine === "crisperwhisper" ? "none" : "";
 }
 
 function toggleSettings() {
