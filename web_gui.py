@@ -67,11 +67,12 @@ def serve_media():
 
 @app.route("/api/transcribe", methods=["POST"])
 def transcribe_sse():
-    """Start WhisperX transcription and stream progress via SSE."""
+    """Start transcription and stream progress via SSE."""
     data = request.get_json()
     video_path = data.get("video_path", "")
     model = data.get("model", "medium")
     language = data.get("language", "en")
+    engine = data.get("engine", "whisperx")
 
     video = Path(video_path).resolve()
     if not video.exists():
@@ -80,6 +81,10 @@ def transcribe_sse():
     out_dir = video.parent
     stem = video.stem
 
+    if engine == "crisperwhisper":
+        return _transcribe_crisper_sse(video, out_dir, stem, language)
+
+    # Default: WhisperX via subprocess
     cmd = [
         "whisperx",
         str(video),
@@ -126,6 +131,59 @@ def transcribe_sse():
             "orig_srt_path": str(orig_srt_path),
         }
         yield f"data: {json.dumps(result)}\n\n"
+
+    return Response(generate(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+def _transcribe_crisper_sse(video, out_dir, stem, language):
+    """Run CrisperWhisper transcription with SSE progress streaming."""
+    from auto_transcript import transcribe_crisper
+    import queue
+    import threading
+
+    progress_queue = queue.Queue()
+
+    def run_transcription():
+        try:
+            result = transcribe_crisper(
+                str(video), language=language, output_dir=str(out_dir),
+                progress_callback=lambda msg: progress_queue.put(("progress", msg)),
+            )
+            progress_queue.put(("done", result))
+        except Exception as e:
+            progress_queue.put(("error", str(e)))
+
+    def generate():
+        yield f"data: {json.dumps({'type': 'start', 'message': 'Starting CrisperWhisper (verbatim mode)...'})}\n\n"
+
+        thread = threading.Thread(target=run_transcription, daemon=True)
+        thread.start()
+
+        while True:
+            try:
+                kind, payload = progress_queue.get(timeout=0.5)
+            except queue.Empty:
+                if not thread.is_alive():
+                    break
+                continue
+
+            if kind == "progress":
+                yield f"data: {json.dumps({'type': 'progress', 'message': payload})}\n\n"
+            elif kind == "error":
+                yield f"data: {json.dumps({'type': 'error', 'message': payload})}\n\n"
+                return
+            elif kind == "done":
+                json_path, srt_path, orig_srt_path = payload
+                result = {
+                    "type": "done",
+                    "message": "Transcription complete (CrisperWhisper).",
+                    "json_path": str(json_path),
+                    "srt_path": str(srt_path),
+                    "orig_srt_path": str(orig_srt_path),
+                }
+                yield f"data: {json.dumps(result)}\n\n"
+                return
 
     return Response(generate(), mimetype="text/event-stream",
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
@@ -210,6 +268,7 @@ def export_video():
     audio_codec = data.get("audio_codec")
     ffmpeg_args = data.get("ffmpeg_args")
     edit_method = data.get("edit_method")
+    export_folder = data.get("export_folder", "")
 
     video = Path(video_path).resolve()
     if not video.exists():
@@ -218,6 +277,23 @@ def export_video():
     transcript_cuts = [(r["start"], r["end"]) for r in deleted_ranges] if deleted_ranges else None
 
     extra_args = []
+
+    # Output path: if export_folder is set, put the output there
+    if export_folder:
+        export_dir = Path(export_folder).resolve()
+        export_dir.mkdir(parents=True, exist_ok=True)
+        # Determine output extension based on format
+        ext_map = {
+            "final-cut-pro": ".fcpxml",
+            "premiere": ".xml",
+            "resolve": ".fcpxml",
+            "clip-sequence": "",
+            "video": video.suffix,
+        }
+        ext = ext_map.get(export_format, video.suffix)
+        output_name = video.stem + "_ALTERED" + ext
+        output_path = export_dir / output_name
+        extra_args.extend(["--output-file", str(output_path)])
     if silent_speed is not None and silent_speed != "":
         extra_args.extend(["--video-speed", str(silent_speed)])
     if sounded_speed is not None and sounded_speed != "":

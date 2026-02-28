@@ -905,6 +905,14 @@ mark.search-highlight.current {
       <div class="settings-section">
         <div class="settings-section-title">Transcription</div>
         <div class="settings-grid">
+          <div class="settings-field full-width">
+            <label>Transcription engine</label>
+            <select id="settTranscriptionEngine">
+              <option value="whisperx">WhisperX</option>
+              <option value="crisperwhisper">CrisperWhisper (verbatim)</option>
+            </select>
+            <span class="hint">CrisperWhisper preserves filler words (um, uh), stutters, and false starts</span>
+          </div>
           <div class="settings-field">
             <label>WhisperX model</label>
             <select id="settWhisperModel">
@@ -965,6 +973,11 @@ mark.search-highlight.current {
             <label>Edit method</label>
             <input type="text" id="settEditMethod" placeholder="audio:threshold=4%">
             <span class="hint">auto-editor --edit flag (e.g. audio:threshold=4%, motion:threshold=2%)</span>
+          </div>
+          <div class="settings-field full-width">
+            <label>Export folder</label>
+            <input type="text" id="settExportFolder" placeholder="Same folder as video">
+            <span class="hint">Where exported files are saved. Leave blank to save next to the source video.</span>
           </div>
         </div>
       </div>
@@ -1321,6 +1334,7 @@ function startTranscribe() {
       video_path: path,
       model: loadSettings().whisperModel,
       language: loadSettings().language,
+      engine: loadSettings().transcriptionEngine,
     }),
   }).then(response => {
     const reader = response.body.getReader();
@@ -1906,6 +1920,7 @@ function toggleAdvanced() {
 const SETTINGS_KEY = "papercut-settings";
 
 const SETTINGS_DEFAULTS = {
+  transcriptionEngine: "whisperx",
   whisperModel: "medium",
   language: "en",
   exportFormat: "final-cut-pro",
@@ -1916,6 +1931,7 @@ const SETTINGS_DEFAULTS = {
   audioCodec: "",
   ffmpegArgs: "",
   editMethod: "",
+  exportFolder: "",
   syncPlayback: "true",
   syncScroll: "true",
 };
@@ -1933,6 +1949,7 @@ function applySettings() {
   const s = loadSettings();
 
   // Populate settings form
+  document.getElementById("settTranscriptionEngine").value = s.transcriptionEngine;
   document.getElementById("settWhisperModel").value = s.whisperModel;
   document.getElementById("settLanguage").value = s.language;
   document.getElementById("settExportFormat").value = s.exportFormat;
@@ -1943,6 +1960,7 @@ function applySettings() {
   document.getElementById("settAudioCodec").value = s.audioCodec;
   document.getElementById("settFfmpegArgs").value = s.ffmpegArgs;
   document.getElementById("settEditMethod").value = s.editMethod;
+  document.getElementById("settExportFolder").value = s.exportFolder;
   document.getElementById("settSyncPlayback").value = s.syncPlayback;
   document.getElementById("settSyncScroll").value = s.syncScroll;
 
@@ -1962,6 +1980,7 @@ function applySettings() {
 
 function saveSettings() {
   const s = {
+    transcriptionEngine: document.getElementById("settTranscriptionEngine").value,
     whisperModel: document.getElementById("settWhisperModel").value,
     language: document.getElementById("settLanguage").value,
     exportFormat: document.getElementById("settExportFormat").value,
@@ -1972,6 +1991,7 @@ function saveSettings() {
     audioCodec: document.getElementById("settAudioCodec").value.trim(),
     ffmpegArgs: document.getElementById("settFfmpegArgs").value.trim(),
     editMethod: document.getElementById("settEditMethod").value.trim(),
+    exportFolder: document.getElementById("settExportFolder").value.trim(),
     syncPlayback: document.getElementById("settSyncPlayback").value,
     syncScroll: document.getElementById("settSyncScroll").value,
   };
@@ -2036,6 +2056,7 @@ function startExport() {
       deleted_ranges: deletedRanges,
       margin: parseFloat($marginSlider.value),
       export: document.getElementById("exportFormat").value,
+      export_folder: loadSettings().exportFolder || "",
     };
 
     const silentSpeed = document.getElementById("silentSpeed").value.trim();
