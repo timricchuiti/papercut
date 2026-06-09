@@ -197,18 +197,22 @@ def cmd_export(args):
             kept = result.get("total_duration") or 0.0
             reduction = (1 - kept / src) if src > 0 else 0.0
             warn = _cut_warning(reduction)
+            checks = result.get("warnings", [])  # tiny-clip / tiling guardrail
 
             print(f"  -> {Path(result['output_path']).name}  "
                   f"{result['clip_count']} clips, kept {kept:.1f}s of {src:.1f}s "
                   f"({reduction*100:.0f}% removed)")
             if warn:
                 print(f"  {warn}")
+            for c in checks:
+                print(f"  ⚠ OUTPUT CHECK: {c}", file=sys.stderr)
 
             report_lines.append(
                 f"- **{m.name}** → `{Path(result['output_path']).name}` — "
                 f"{result['clip_count']} clips, kept {kept:.1f}s / {src:.1f}s "
                 f"({reduction*100:.0f}% removed)"
                 + (f"  \n  {warn}" if warn else "")
+                + "".join(f"  \n  ⚠ OUTPUT CHECK: {c}" for c in checks)
             )
             ok += 1
         except Exception as e:
