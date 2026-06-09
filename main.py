@@ -124,6 +124,8 @@ def main():
     print(result["message"])
     print(f"  kept {kept:.1f}s of {src:.1f}s ({reduction:.0f}% removed)")
     print(f"  output: {result['output_path']}")
+    for w in result.get("warnings", []):
+        print(f"  ⚠ WARNING: {w}", file=sys.stderr)
 
 
 if __name__ == "__main__":

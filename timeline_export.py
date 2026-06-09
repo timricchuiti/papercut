@@ -5,6 +5,7 @@ Replaces auto-editor's export functionality with support for reordered clips.
 """
 
 import json
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -231,8 +232,11 @@ def generate_fcpxml(media_path, clips, media_info):
     has_video = media_info["has_video"]
     has_audio = media_info["has_audio"]
 
-    # Calculate total timeline duration
-    timeline_dur = sum(c.duration for c in clips)
+    fps = fr_num / fr_den
+
+    def _frames_to_rational(frames):
+        # Frame-exact rational: frames * (den/num) seconds.
+        return f"{frames * fr_den}/{fr_num}s"
 
     # Format spec — mirror auto-editor: a recognized name (or RateUndefined),
     # plus frameDuration/width/height AND colorSpace. FCP rejects the sequence's
@@ -249,8 +253,10 @@ def generate_fcpxml(media_path, clips, media_info):
         # Audio-only: no video format name, no dimensions.
         format_el = f'    <format id="r1" frameDuration="{fr_den}/{fr_num}s"/>'
 
-    # Asset — FCPXML 1.11 requires <media-rep> child instead of src attribute
-    tl_dur_str = _seconds_to_rational(timeline_dur, fr_num, fr_den)
+    # Asset — duration is the FULL source media duration (clips reference into
+    # it), expressed in exact frames. FCPXML 1.11 uses a <media-rep> child.
+    source_dur_frames = max(1, round(media_info.get("duration", 0) * fps))
+    tl_dur_str = _frames_to_rational(source_dur_frames)
     file_url = f"file://{xml_escape(str(p.resolve()))}"
     media_rep = f'      <media-rep kind="original-media" src="{file_url}"/>'
 
@@ -258,17 +264,24 @@ def generate_fcpxml(media_path, clips, media_info):
     has_audio_str = "1" if has_audio else "0"
     asset_el = f'    <asset id="r2" name="{xml_escape(p.stem)}" start="0s" hasVideo="{has_video_str}" format="r1" hasAudio="{has_audio_str}" audioSources="1" audioChannels="2" duration="{tl_dur_str}">\n{media_rep}\n    </asset>'
 
-    # Build spine clips
+    # Build spine clips — accumulate the timeline position in INTEGER FRAMES so
+    # every clip's offset equals the exact sum of prior durations. Rounding each
+    # clip's offset and duration independently from floats (the old approach)
+    # produced ±1-frame gaps/overlaps that FCP imports as spurious 1–2 frame clips.
     spine_items = []
-    timeline_pos = 0.0
+    timeline_frames = 0
     for clip in clips:
-        offset = _seconds_to_rational(timeline_pos, fr_num, fr_den)
-        start = _seconds_to_rational(clip.source_in, fr_num, fr_den)
-        dur = _seconds_to_rational(clip.duration, fr_num, fr_den)
+        in_frame = round(clip.source_in * fps)
+        dur_frames = round(clip.duration * fps)
+        if dur_frames <= 0:
+            continue  # degenerate clip — skip rather than emit a 0-length item
+        offset = _frames_to_rational(timeline_frames)
+        start = _frames_to_rational(in_frame)
+        dur = _frames_to_rational(dur_frames)
         spine_items.append(
             f'          <asset-clip name="{xml_escape(p.stem)}" ref="r2" offset="{offset}" duration="{dur}" start="{start}" tcFormat="NDF"/>'
         )
-        timeline_pos += clip.duration
+        timeline_frames += dur_frames
 
     spine_xml = "\n".join(spine_items)
 
@@ -402,6 +415,60 @@ def generate_premiere_xml(media_path, clips, media_info):
   </bin>
 </xmeml>
 """
+
+
+#: A clip this short (frames) in the final output means a sliver/rounding bug
+#: slipped through — surfaced as a loud warning, not silently shipped.
+MAX_BAD_FRAMES = 4
+
+
+def validate_fcpxml(xml_str, max_bad_frames=MAX_BAD_FRAMES):
+    """Sanity-check a generated FCPXML for artifacts FCP would surface.
+
+    Returns a list of human-readable warnings (empty list = clean):
+      - any spine clip <= max_bad_frames frames long
+      - any boundary where a clip's offset != previous offset + duration
+        (a ±1-frame gap/overlap, which FCP renders as a tiny clip)
+
+    This is a last-line guardrail; the sliver filter and integer-frame tiling
+    should keep it from ever firing.
+    """
+    warnings = []
+    fd = re.search(r'<format[^>]*frameDuration="(\d+)/(\d+)s"', xml_str)
+    if not fd:
+        return warnings
+    fr_den, fr_num = int(fd.group(1)), int(fd.group(2))
+    fps = fr_num / fr_den if fr_den else 0
+    if not fps:
+        return warnings
+
+    offs, durs = [], []
+    for on, od, dn, dd in re.findall(
+        r'<asset-clip[^>]*offset="(\d+)/(\d+)s"[^>]*duration="(\d+)/(\d+)s"', xml_str
+    ):
+        durs.append(round(int(dn) / int(dd) * fps))
+        offs.append(round(int(on) / int(od) * fps))
+
+    if not durs:
+        return warnings
+
+    short = [d for d in durs if d <= max_bad_frames]
+    if short:
+        warnings.append(
+            f"{len(short)} clip(s) <= {max_bad_frames} frames "
+            f"(shortest {min(durs)}f) — sliver/rounding bug suspected"
+        )
+
+    mismatches = sum(
+        1 for i in range(len(offs) - 1) if offs[i + 1] != offs[i] + durs[i]
+    )
+    if mismatches:
+        warnings.append(
+            f"{mismatches} clip-boundary tiling mismatch(es) — would import as "
+            f"spurious 1-2 frame gaps/clips"
+        )
+
+    return warnings
 
 
 def export_video(media_path, clips, output_path, extra_args=None):

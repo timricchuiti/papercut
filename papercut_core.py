@@ -21,7 +21,7 @@ from transcript_diff import parse_srt, load_whisper_json
 from silence import detect_silence, apply_margin, get_kept_ranges
 from timeline_export import (
     build_clip_list, get_media_info,
-    generate_fcpxml, generate_premiere_xml, export_video,
+    generate_fcpxml, generate_premiere_xml, export_video, validate_fcpxml,
 )
 
 # Map export format -> output file extension.
@@ -296,6 +296,14 @@ def export_from_blocks(video, ordered_blocks, whisper_data=None,
     write_export(video, clips, media_info, export_format, output_path,
                  ffmpeg_args=ffmpeg_args)
 
+    # Guardrail: scan the written FCPXML for tiny clips / tiling errors.
+    warnings = []
+    if export_format in ("final-cut-pro", "resolve"):
+        try:
+            warnings = validate_fcpxml(Path(output_path).read_text(encoding="utf-8"))
+        except OSError:
+            pass
+
     total_dur = sum(c.duration for c in clips)
     source_dur = media_info.get("duration", 0.0)
     return {
@@ -304,6 +312,7 @@ def export_from_blocks(video, ordered_blocks, whisper_data=None,
         "clip_count": len(clips),
         "total_duration": total_dur,
         "source_duration": source_dur,
+        "warnings": warnings,
         "message": f"Export completed: {Path(output_path).name} "
                    f"({len(clips)} clips, {total_dur:.1f}s)",
     }
