@@ -1,81 +1,31 @@
 #!/usr/bin/env python3
-"""CLI orchestrator for PaperCut — transcript-based video editing."""
+"""CLI orchestrator for PaperCut — single-file transcript-based video editing.
+
+For batches, use `batch.py`. This is the one-file equivalent:
+
+    # Transcribe (verbatim by default):
+    python3 main.py video.mp4 --transcribe-only
+
+    # Open the SRT to edit, then export to Final Cut Pro:
+    python3 main.py video.mp4 --edit-transcript
+    python3 main.py video.mp4 --export final-cut-pro
+
+Run under the CrisperWhisper venv (`.venv-crisper/bin/python`) for transcription.
+"""
 
 import argparse
-import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 
 from auto_transcript import transcribe
-from transcript_diff import find_deleted_ranges, parse_srt
-from merge_cutlists import build_auto_editor_cmd, run_auto_editor
-
-
-def get_video_duration(video_path):
-    """Get video duration in seconds using ffprobe."""
-    cmd = [
-        "ffprobe", "-v", "quiet",
-        "-print_format", "json",
-        "-show_format",
-        str(video_path),
-    ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode == 0:
-            data = json.loads(result.stdout)
-            return float(data["format"]["duration"])
-    except (json.JSONDecodeError, KeyError, ValueError):
-        pass
-    return None
-
-
-def print_summary(video_path, original_srt, deleted_ranges):
-    """Print editing statistics."""
-    print("\n--- Edit Summary ---")
-
-    duration = get_video_duration(video_path)
-    if duration:
-        print(f"  Input duration:        {_format_duration(duration)}")
-
-    original_blocks = parse_srt(original_srt)
-    total_blocks = len(original_blocks)
-
-    cut_duration = sum(end - start for start, end in deleted_ranges)
-    num_cuts = len(deleted_ranges)
-
-    # Count deleted blocks (blocks in original not accounted for by remaining)
-    # We approximate: number of cuts ~ number of deleted blocks
-    print(f"  Transcript blocks:     {total_blocks}")
-    print(f"  Blocks removed:        {num_cuts}")
-    print(f"  Time removed:          {_format_duration(cut_duration)}")
-
-    if duration:
-        remaining = duration - cut_duration
-        pct = (cut_duration / duration) * 100 if duration > 0 else 0
-        print(f"  Estimated output:      {_format_duration(remaining)}")
-        print(f"  Reduction:             {pct:.1f}%")
-
-    print("--------------------\n")
-
-
-def _format_duration(seconds):
-    """Format seconds into MM:SS.s or HH:MM:SS.s."""
-    if seconds < 0:
-        seconds = 0
-    h = int(seconds // 3600)
-    m = int((seconds % 3600) // 60)
-    s = seconds % 60
-    if h > 0:
-        return f"{h}:{m:02d}:{s:05.2f}"
-    return f"{m}:{s:05.2f}"
+from papercut_core import export_from_srt
 
 
 def open_in_editor(filepath):
     """Open a file in the user's default editor."""
     editor = os.environ.get("EDITOR", os.environ.get("VISUAL"))
-
     if editor:
         subprocess.run([editor, str(filepath)])
     elif sys.platform == "darwin":
@@ -88,118 +38,92 @@ def open_in_editor(filepath):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="PaperCut — transcript-based video editing.",
-        epilog="Example: python3 main.py video.mp4 --transcript video.srt --whisper-json video.json --export final-cut-pro",
+        description="PaperCut — transcript-based video editing (single file).",
+        epilog="Example: python3 main.py video.mp4 --export final-cut-pro",
     )
-    parser.add_argument("video", help="Path to the input video file")
+    parser.add_argument("video", help="Path to the input video/audio file")
 
-    # Transcript inputs
-    parser.add_argument("--transcript", help="Path to the edited .srt file")
-    parser.add_argument("--whisper-json", help="Path to the WhisperX .json file")
-    parser.add_argument("--original-srt", help="Path to the original .srt.orig file (default: <transcript>.orig)")
+    # Transcript inputs (default to companions next to the media)
+    parser.add_argument("--transcript", help="Path to the edited .srt (default: <video>.srt)")
+    parser.add_argument("--whisper-json", help="Path to the .json (default: <video>.json)")
+    parser.add_argument("--original-srt", help="Path to the .srt.orig (default: <transcript>.orig)")
 
-    # Workflow flags
+    # Workflow
     parser.add_argument("--transcribe-only", action="store_true",
                         help="Generate transcript and stop")
     parser.add_argument("--edit-transcript", action="store_true",
-                        help="Open SRT in default text editor")
-    parser.add_argument("--summary", action="store_true",
-                        help="Print edit statistics")
+                        help="Open the SRT in your default text editor")
 
-    # auto-editor options
-    parser.add_argument("--margin", default=None,
-                        help="Margin around cuts (passed directly to auto-editor, e.g., 0.15sec)")
+    # Export
     parser.add_argument("--export", default=None,
-                        help="Export format: final-cut-pro, premiere, resolve, clip-sequence, or video")
+                        choices=["final-cut-pro", "resolve", "premiere", "video"],
+                        help="Export format")
+    parser.add_argument("--margin", type=float, default=0.1,
+                        help="Boundary padding in seconds (default: 0.1)")
+    parser.add_argument("--threshold", type=float, default=0.04,
+                        help="Silence amplitude threshold (default: 0.04)")
     parser.add_argument("--ffmpeg-args", default=None,
-                        help='FFmpeg args for re-encoding (e.g., "-crf 22 -preset veryfast")')
+                        help='FFmpeg args for --export video (e.g. "-crf 22 -preset veryfast")')
+    parser.add_argument("--output", default=None, help="Explicit output path")
 
-    # Transcription options (for --transcribe-only)
-    parser.add_argument("--model", default="medium", help="WhisperX model size (default: medium)")
-    parser.add_argument("--language", default="en", help="Language code (default: en)")
-    parser.add_argument("--output-dir", default=None, help="Output directory for transcription")
+    # Transcription options
+    parser.add_argument("--engine", default="crisperwhisper",
+                        choices=["crisperwhisper", "whisperx"],
+                        help="Transcription engine (default: crisperwhisper)")
+    parser.add_argument("--model", default="medium",
+                        help="WhisperX model size (ignored for CrisperWhisper)")
+    parser.add_argument("--language", default="en", help="Language code")
+    parser.add_argument("--output-dir", default=None, help="Transcription output directory")
 
     args = parser.parse_args()
 
     video = Path(args.video).resolve()
     if not video.exists():
-        print(f"Error: Video file not found: {video}", file=sys.stderr)
+        print(f"Error: media file not found: {video}", file=sys.stderr)
         sys.exit(1)
 
-    # Phase 1: Transcribe only
     if args.transcribe_only:
         transcribe(str(video), model=args.model, language=args.language,
-                   output_dir=args.output_dir)
+                   output_dir=args.output_dir, engine=args.engine)
         return
 
-    # Determine SRT paths
-    if args.transcript:
-        edited_srt = Path(args.transcript).resolve()
-    else:
-        edited_srt = video.with_suffix(".srt")
+    edited_srt = Path(args.transcript).resolve() if args.transcript else video.with_suffix(".srt")
 
-    if args.original_srt:
-        original_srt = Path(args.original_srt).resolve()
-    else:
-        original_srt = Path(str(edited_srt) + ".orig")
-
-    if args.whisper_json:
-        whisper_json = Path(args.whisper_json).resolve()
-    else:
-        whisper_json = video.with_suffix(".json")
-
-    # Open editor if requested
     if args.edit_transcript:
         if not edited_srt.exists():
-            print(f"Error: SRT file not found: {edited_srt}", file=sys.stderr)
-            print("Run with --transcribe-only first to generate the transcript.")
+            print(f"Error: SRT not found: {edited_srt}\nRun --transcribe-only first.",
+                  file=sys.stderr)
             sys.exit(1)
         open_in_editor(edited_srt)
-        print(f"Editor closed. Re-run without --edit-transcript to apply cuts.")
+        print("Editor closed. Re-run with --export to apply cuts.")
         return
 
-    # Validate required files
-    for path, label in [(edited_srt, "Edited SRT"), (original_srt, "Original SRT"),
-                        (whisper_json, "WhisperX JSON")]:
-        if not path.exists():
-            print(f"Error: {label} not found: {path}", file=sys.stderr)
-            if label == "Original SRT":
-                print("Hint: Run auto_transcript.py first, or provide --original-srt.", file=sys.stderr)
-            sys.exit(1)
+    if not args.export:
+        parser.error("Nothing to do — pass --transcribe-only, --edit-transcript, or --export.")
 
-    # Phase 2: Diff transcripts
-    print(f"Comparing transcripts...")
-    print(f"  Original: {original_srt}")
-    print(f"  Edited:   {edited_srt}")
+    whisper_json = (Path(args.whisper_json).resolve() if args.whisper_json
+                    else video.with_suffix(".json"))
+    orig_srt = (Path(args.original_srt).resolve() if args.original_srt
+                else Path(str(edited_srt) + ".orig"))
 
-    deleted_ranges = find_deleted_ranges(str(original_srt), str(edited_srt), str(whisper_json))
+    if not edited_srt.exists():
+        print(f"Error: edited SRT not found: {edited_srt}", file=sys.stderr)
+        sys.exit(1)
 
-    if not deleted_ranges:
-        print("No transcript edits detected. Running auto-editor with default settings only.")
-
-    if deleted_ranges:
-        print(f"\nFound {len(deleted_ranges)} transcript cut(s):")
-        for start, end in deleted_ranges:
-            print(f"  {start:.3f}s — {end:.3f}s  ({end - start:.3f}s)")
-
-    # Summary
-    if args.summary:
-        print_summary(str(video), str(original_srt), deleted_ranges)
-
-    # Phase 3: Build and run auto-editor
-    extra_args = []
-    if args.ffmpeg_args:
-        extra_args.extend(args.ffmpeg_args.split())
-
-    cmd = build_auto_editor_cmd(
-        video_path=str(video),
-        transcript_cuts=deleted_ranges if deleted_ranges else None,
-        margin=args.margin,
-        export=args.export,
-        extra_args=extra_args if extra_args else None,
+    result = export_from_srt(
+        str(video), str(edited_srt),
+        whisper_json=str(whisper_json) if whisper_json.exists() else None,
+        orig_srt=str(orig_srt) if orig_srt.exists() else None,
+        export_format=args.export, margin=args.margin, threshold=args.threshold,
+        ffmpeg_args=args.ffmpeg_args, output_path=args.output,
     )
 
-    run_auto_editor(cmd)
+    src = result.get("source_duration") or 0.0
+    kept = result.get("total_duration") or 0.0
+    reduction = (1 - kept / src) * 100 if src > 0 else 0.0
+    print(result["message"])
+    print(f"  kept {kept:.1f}s of {src:.1f}s ({reduction:.0f}% removed)")
+    print(f"  output: {result['output_path']}")
 
 
 if __name__ == "__main__":

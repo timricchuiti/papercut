@@ -42,7 +42,9 @@ def get_media_info(path):
     cmd = [
         "ffprobe", "-v", "error",
         "-show_entries", "format=duration",
-        "-show_entries", "stream=codec_type,width,height,r_frame_rate,sample_rate",
+        "-show_entries",
+        "stream=codec_type,width,height,r_frame_rate,sample_rate,"
+        "pix_fmt,color_space,color_primaries,color_transfer",
         "-print_format", "json",
         str(path),
     ]
@@ -62,6 +64,7 @@ def get_media_info(path):
         "sample_rate": 48000,
         "has_video": False,
         "has_audio": False,
+        "color_space": "1-1-1 (Rec. 709)",
     }
 
     for stream in data.get("streams", []):
@@ -80,6 +83,7 @@ def get_media_info(path):
                     info["frame_rate"] = num / den
                     info["frame_rate_num"] = num
                     info["frame_rate_den"] = den
+            info["color_space"] = _fcp_colorspace(stream)
         elif codec_type == "audio":
             info["has_audio"] = True
             if stream.get("sample_rate"):
@@ -88,7 +92,38 @@ def get_media_info(path):
     return info
 
 
-def build_clip_list(ordered_blocks, silence_kept_ranges, margin=0.0):
+def _fcp_colorspace(stream):
+    """Map ffprobe color metadata to an FCPXML colorSpace string.
+
+    Mirrors auto-editor's mapping. Defaults to Rec. 709, which is what FCP
+    expects for typical SDR H.264/HEVC screen recordings.
+    """
+    pix_fmt = stream.get("pix_fmt", "")
+    cs = stream.get("color_space", "")
+    cp = stream.get("color_primaries", "")
+    ct = stream.get("color_transfer", "")
+
+    if pix_fmt == "rgb24":
+        return "sRGB IEC61966-2.1"
+    if cs == "bt470bg":
+        return "5-1-6 (Rec. 601 PAL)"
+    if cs == "smpte170m":
+        return "6-1-6 (Rec. 601 NTSC)"
+    if cp == "bt2020":
+        if ct in ("smpte2084", "arib-std-b67"):
+            return "9-18-9 (Rec. 2020 HLG)"
+        return "9-1-9 (Rec. 2020)"
+    return "1-1-1 (Rec. 709)"
+
+
+#: Clips shorter than this (seconds) are dropped — they're boundary slivers
+#: from a transient crossing the silence threshold for a frame or two, not real
+#: content. Smallest legitimate speech clips run ~0.2s+, so this is safe.
+MIN_CLIP_DURATION = 0.1
+
+
+def build_clip_list(ordered_blocks, silence_kept_ranges, margin=0.0,
+                    min_clip_dur=MIN_CLIP_DURATION):
     """Build final clip list from user's ordered blocks + silence-detected kept ranges.
 
     For each kept block (in user's order), find silence-detected kept ranges that
@@ -98,6 +133,7 @@ def build_clip_list(ordered_blocks, silence_kept_ranges, margin=0.0):
         ordered_blocks: List of dicts with 'start' and 'end' (seconds), in user's desired order.
         silence_kept_ranges: List of (start_sec, end_sec) from silence detection.
         margin: Extra padding in seconds to add around each clip boundary.
+        min_clip_dur: Drop clips shorter than this many seconds (sliver filter).
 
     Returns:
         List of Clip objects in playback order.
@@ -109,16 +145,17 @@ def build_clip_list(ordered_blocks, silence_kept_ranges, margin=0.0):
         block_end = block["end"]
 
         # Find silence-kept ranges overlapping this block
+        # The kept_ranges already have margin applied (from apply_margin in silence.py),
+        # so we just need to find which ones overlap with this block's time span.
+        # We allow kept ranges to extend slightly beyond block boundaries — the margin
+        # is meant to include a bit of silence before/after speech.
         block_clips = []
         for rng_start, rng_end in silence_kept_ranges:
-            # Check overlap
-            overlap_start = max(rng_start, block_start)
-            overlap_end = min(rng_end, block_end)
+            # Check if this kept range overlaps the block (with margin tolerance)
+            overlap_start = max(rng_start, block_start - margin)
+            overlap_end = min(rng_end, block_end + margin)
             if overlap_start < overlap_end:
-                # Apply margin (expand clip, but clamp to block boundaries)
-                clip_in = max(block_start, overlap_start - margin)
-                clip_out = min(block_end, overlap_end + margin)
-                block_clips.append(Clip(source_in=clip_in, source_out=clip_out))
+                block_clips.append(Clip(source_in=overlap_start, source_out=overlap_end))
 
         if block_clips:
             # Merge overlapping clips within this block
@@ -130,19 +167,50 @@ def build_clip_list(ordered_blocks, silence_kept_ranges, margin=0.0):
                     merged.append(c)
             clips.extend(merged)
         else:
-            # No silence data overlaps — keep entire block (minus margin clamp)
+            # No silence data overlaps — keep entire block
             clips.append(Clip(source_in=block_start, source_out=block_end))
+
+    # Drop sub-threshold slivers (transients clipped at block boundaries).
+    if min_clip_dur > 0:
+        clips = [c for c in clips if c.duration >= min_clip_dur]
 
     return clips
 
 
+def _fcp_format_name(width, height, fr_num, fr_den):
+    """Return an FCP-recognized format name, or None for non-standard formats.
+
+    FCP only recognizes a small set of predefined format names. Using a name FCP
+    doesn't know — or the "FFVideoFormatRateUndefined" token alongside a concrete
+    frameDuration — triggers an "unexpected value" import warning. For anything
+    outside the known set (e.g. 1080p60, 4K, portrait, odd rates), return None so
+    the caller emits a NAMELESS format defined purely by frameDuration/width/
+    height, which FCP accepts for any resolution and frame rate.
+    """
+    fps = round(fr_num / fr_den)
+    scan_lines = min(width, height)
+    if scan_lines == 720 and fps == 30:
+        return "FFVideoFormat720p30"
+    if scan_lines == 720 and fps == 25:
+        return "FFVideoFormat720p25"
+    if (width, height) == (3840, 2160) and (fr_num, fr_den) == (24000, 1001):
+        return "FFVideoFormat3840x2160p2398"
+    # Non-standard (e.g. 1080p60): FCP infers from frameDuration/width/height/
+    # colorSpace. "RateUndefined" + those attributes is what auto-editor emits.
+    return "FFVideoFormatRateUndefined"
+
+
 def _seconds_to_rational(seconds, frame_rate_num, frame_rate_den):
-    """Convert seconds to FCPXML rational time string (e.g. '3003/30000s')."""
-    # Use frame_rate_num as timebase denominator for frame-accurate times
-    # FCPXML uses rational time: numerator/denominator format
-    timebase = frame_rate_num * 100  # high-precision timebase
-    ticks = round(seconds * timebase / frame_rate_den)
-    return f"{ticks}/{timebase}s"
+    """Convert seconds to FCPXML rational time string snapped to frame boundaries.
+
+    FCPXML requires all times to be exact multiples of the frame duration.
+    Frame duration = frame_rate_den / frame_rate_num seconds.
+    So we express time as: (frame_count * frame_rate_den) / frame_rate_num seconds.
+    """
+    # Convert seconds to frame count (snap to nearest frame)
+    frame_count = round(seconds * frame_rate_num / frame_rate_den)
+    numerator = frame_count * frame_rate_den
+    return f"{numerator}/{frame_rate_num}s"
 
 
 def generate_fcpxml(media_path, clips, media_info):
@@ -160,29 +228,35 @@ def generate_fcpxml(media_path, clips, media_info):
     filename = p.name
     fr_num = media_info["frame_rate_num"]
     fr_den = media_info["frame_rate_den"]
-    duration = media_info["duration"]
     has_video = media_info["has_video"]
     has_audio = media_info["has_audio"]
 
     # Calculate total timeline duration
     timeline_dur = sum(c.duration for c in clips)
 
-    # Format spec
+    # Format spec — mirror auto-editor: a recognized name (or RateUndefined),
+    # plus frameDuration/width/height AND colorSpace. FCP rejects the sequence's
+    # format reference when colorSpace is missing on a non-standard format.
+    color_space = media_info.get("color_space", "1-1-1 (Rec. 709)")
     if has_video:
         w = media_info["width"] or 1920
         h = media_info["height"] or 1080
-        format_el = f'    <format id="r1" name="FFVideoFormat{h}p{round(fr_num/fr_den)}" frameDuration="{fr_den}/{fr_num}s" width="{w}" height="{h}"/>'
+        fmt_name = _fcp_format_name(w, h, fr_num, fr_den)
+        format_el = (f'    <format id="r1" name="{fmt_name}" '
+                     f'frameDuration="{fr_den}/{fr_num}s" '
+                     f'width="{w}" height="{h}" colorSpace="{color_space}"/>')
     else:
-        format_el = f'    <format id="r1" name="FFVideoFormatRateUndefined" frameDuration="{fr_den}/{fr_num}s"/>'
+        # Audio-only: no video format name, no dimensions.
+        format_el = f'    <format id="r1" frameDuration="{fr_den}/{fr_num}s"/>'
 
-    # Asset
-    src_str = _seconds_to_rational(duration, fr_num, fr_den)
-    if has_video and has_audio:
-        asset_el = f'    <asset id="r2" name="{xml_escape(p.stem)}" src="file://{xml_escape(str(p.resolve()))}" start="0/1s" duration="{src_str}" hasVideo="1" hasAudio="1" format="r1" audioSources="1" audioChannels="2"/>'
-    elif has_audio:
-        asset_el = f'    <asset id="r2" name="{xml_escape(p.stem)}" src="file://{xml_escape(str(p.resolve()))}" start="0/1s" duration="{src_str}" hasAudio="1" format="r1" audioSources="1" audioChannels="2"/>'
-    else:
-        asset_el = f'    <asset id="r2" name="{xml_escape(p.stem)}" src="file://{xml_escape(str(p.resolve()))}" start="0/1s" duration="{src_str}" hasVideo="1" format="r1"/>'
+    # Asset — FCPXML 1.11 requires <media-rep> child instead of src attribute
+    tl_dur_str = _seconds_to_rational(timeline_dur, fr_num, fr_den)
+    file_url = f"file://{xml_escape(str(p.resolve()))}"
+    media_rep = f'      <media-rep kind="original-media" src="{file_url}"/>'
+
+    has_video_str = "1" if has_video else "0"
+    has_audio_str = "1" if has_audio else "0"
+    asset_el = f'    <asset id="r2" name="{xml_escape(p.stem)}" start="0s" hasVideo="{has_video_str}" format="r1" hasAudio="{has_audio_str}" audioSources="1" audioChannels="2" duration="{tl_dur_str}">\n{media_rep}\n    </asset>'
 
     # Build spine clips
     spine_items = []
@@ -192,12 +266,15 @@ def generate_fcpxml(media_path, clips, media_info):
         start = _seconds_to_rational(clip.source_in, fr_num, fr_den)
         dur = _seconds_to_rational(clip.duration, fr_num, fr_den)
         spine_items.append(
-            f'          <asset-clip ref="r2" offset="{offset}" name="{xml_escape(p.stem)}" start="{start}" duration="{dur}"/>'
+            f'          <asset-clip name="{xml_escape(p.stem)}" ref="r2" offset="{offset}" duration="{dur}" start="{start}" tcFormat="NDF"/>'
         )
         timeline_pos += clip.duration
 
-    tl_dur = _seconds_to_rational(timeline_dur, fr_num, fr_den)
     spine_xml = "\n".join(spine_items)
+
+    # Audio layout — match auto-editor's approach
+    sample_rate = media_info.get("sample_rate", 48000)
+    audio_rate = "44.1k" if sample_rate == 44100 else "48k"
 
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE fcpxml>
@@ -209,7 +286,7 @@ def generate_fcpxml(media_path, clips, media_info):
   <library>
     <event name="PaperCut Import">
       <project name="{xml_escape(p.stem)}_ALTERED">
-        <sequence format="r1" duration="{tl_dur}" tcStart="0/1s" tcFormat="NDF">
+        <sequence format="r1" tcStart="0s" tcFormat="NDF" audioLayout="stereo" audioRate="{audio_rate}">
           <spine>
 {spine_xml}
           </spine>

@@ -4,6 +4,7 @@
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import time
@@ -12,11 +13,7 @@ from pathlib import Path
 from flask import Flask, Response, jsonify, request, send_file, send_from_directory
 
 from transcript_diff import find_deleted_ranges, parse_srt, load_whisper_json
-from silence import detect_silence, apply_margin, get_kept_ranges
-from timeline_export import (
-    Clip, build_clip_list, get_media_info,
-    generate_fcpxml, generate_premiere_xml, export_video as export_video_file,
-)
+from papercut_core import export_from_blocks
 
 app = Flask(__name__, static_folder="static")
 app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024 * 1024  # 10 GB
@@ -38,6 +35,49 @@ def index():
 @app.route("/landing")
 def landing():
     return send_from_directory(app.static_folder, "landing.html")
+
+
+@app.route("/api/engines")
+def get_engines():
+    """Report which transcription engines are available."""
+    engines = {
+        "whisperx": {"available": False, "label": "WhisperX"},
+        "crisperwhisper": {"available": False, "label": "CrisperWhisper (verbatim)"},
+    }
+
+    # Check WhisperX
+    if shutil.which("whisperx"):
+        engines["whisperx"]["available"] = True
+    else:
+        engines["whisperx"]["reason"] = "whisperx CLI not found. Install with: pipx install whisperx"
+
+    # Check CrisperWhisper — probe for torch + transformers
+    crisper_ok = True
+    try:
+        import torch  # noqa: F811
+    except ImportError:
+        crisper_ok = False
+        engines["crisperwhisper"]["reason"] = (
+            "Missing PyTorch. Install with: pip install torch torchaudio"
+        )
+    if crisper_ok:
+        try:
+            import transformers  # noqa: F811
+        except ImportError as e:
+            msg = str(e)
+            # Version mismatch from the CrisperWhisper fork (e.g. tokenizers range) is OK
+            if "is required for a normal functioning" in msg:
+                pass  # usable despite version warning
+            else:
+                crisper_ok = False
+                engines["crisperwhisper"]["reason"] = (
+                    f"Missing transformers: {e}. Install with: pip install "
+                    "git+https://github.com/nyrahealth/transformers.git@crisper_whisper"
+                )
+    if crisper_ok:
+        engines["crisperwhisper"]["available"] = True
+
+    return jsonify(engines)
 
 
 @app.route("/api/upload", methods=["POST"])
@@ -263,7 +303,8 @@ def export_video():
     """Build clip list from ordered blocks + silence detection, then export."""
     data = request.get_json()
     video_path = data.get("video_path", "")
-    ordered_blocks = data.get("ordered_blocks", [])  # [{id, start, end}, ...]
+    json_path = data.get("json_path", "")
+    ordered_blocks = data.get("ordered_blocks", [])  # [{id, start, end, text, originalText}, ...]
     margin = data.get("margin", 0.1)
     export_format = data.get("export", "final-cut-pro")
     ffmpeg_args = data.get("ffmpeg_args", "")
@@ -278,69 +319,16 @@ def export_video():
         return jsonify({"success": False, "error": "No blocks to export."}), 400
 
     try:
-        # Probe media
-        media_info = get_media_info(str(video))
-        frame_rate = media_info["frame_rate"]
+        whisper_data = None
+        if json_path and Path(json_path).exists():
+            whisper_data = load_whisper_json(json_path)
 
-        # Parse threshold from edit_method (e.g. "audio:threshold=0.04")
-        threshold = 0.04
-        if edit_method:
-            import re
-            m = re.search(r"threshold=([0-9.]+)", edit_method)
-            if m:
-                threshold = float(m.group(1))
-
-        # Silence detection
-        is_loud = detect_silence(str(video), threshold=threshold, frame_rate=frame_rate,
-                                 sample_rate=media_info["sample_rate"])
-        margin_frames = int(margin * frame_rate)
-        apply_margin(is_loud, margin_frames)
-        kept_ranges = get_kept_ranges(is_loud, frame_rate)
-
-        # Build clip list from user's ordered blocks + silence data
-        clips = build_clip_list(ordered_blocks, kept_ranges, margin=margin)
-
-        if not clips:
-            return jsonify({"success": False, "error": "No audio detected in kept blocks."})
-
-        # Determine output path
-        ext_map = {
-            "final-cut-pro": ".fcpxml",
-            "premiere": ".xml",
-            "resolve": ".fcpxml",
-            "video": video.suffix,
-        }
-        ext = ext_map.get(export_format, video.suffix)
-        output_name = video.stem + "_ALTERED" + ext
-
-        if export_folder:
-            export_dir = Path(export_folder).resolve()
-            export_dir.mkdir(parents=True, exist_ok=True)
-        else:
-            export_dir = video.parent
-
-        output_path = export_dir / output_name
-
-        # Generate export
-        if export_format in ("final-cut-pro", "resolve"):
-            xml = generate_fcpxml(str(video), clips, media_info)
-            output_path.write_text(xml, encoding="utf-8")
-        elif export_format == "premiere":
-            xml = generate_premiere_xml(str(video), clips, media_info)
-            output_path.write_text(xml, encoding="utf-8")
-        elif export_format == "video":
-            extra = ffmpeg_args.split() if ffmpeg_args else None
-            export_video_file(str(video), clips, str(output_path), extra_args=extra)
-        else:
-            return jsonify({"success": False, "error": f"Unknown export format: {export_format}"})
-
-        clip_count = len(clips)
-        total_dur = sum(c.duration for c in clips)
-        return jsonify({
-            "success": True,
-            "message": f"Export completed: {output_path.name} ({clip_count} clips, {total_dur:.1f}s)",
-            "output_path": str(output_path),
-        })
+        result = export_from_blocks(
+            video, ordered_blocks, whisper_data=whisper_data,
+            export_format=export_format, margin=margin, edit_method=edit_method,
+            ffmpeg_args=ffmpeg_args, export_folder=export_folder or None,
+        )
+        return jsonify(result)
 
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})

@@ -1,0 +1,4 @@
+.venv-crisper/
+__pycache__/
+*.pyc
+test_media/
