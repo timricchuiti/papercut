@@ -16,7 +16,7 @@ from pathlib import Path
 
 
 def transcribe(video_path, model="medium", language="en", output_dir=None,
-               engine="whisperx", progress_callback=None):
+               engine="whisperx", progress_callback=None, device="auto"):
     """Run transcription on a video file to produce .json and .srt outputs.
 
     Args:
@@ -33,7 +33,8 @@ def transcribe(video_path, model="medium", language="en", output_dir=None,
     if engine == "crisperwhisper":
         return transcribe_crisper(video_path, language=language,
                                   output_dir=output_dir,
-                                  progress_callback=progress_callback)
+                                  progress_callback=progress_callback,
+                                  device=device)
 
     # Default: WhisperX
     video = Path(video_path).resolve()
@@ -91,8 +92,26 @@ def transcribe(video_path, model="medium", language="en", output_dir=None,
     return json_path, srt_path, orig_srt_path
 
 
+def _pick_device(prefer="auto"):
+    """Choose a torch device. 'auto' -> Apple-Silicon GPU (mps) if available."""
+    import torch
+    if prefer and prefer != "auto":
+        return prefer
+    try:
+        if torch.backends.mps.is_available():
+            return "mps"
+    except Exception:
+        pass
+    try:
+        if torch.cuda.is_available():
+            return "cuda"
+    except Exception:
+        pass
+    return "cpu"
+
+
 def transcribe_crisper(video_path, language="en", output_dir=None,
-                       progress_callback=None):
+                       progress_callback=None, device="auto"):
     """Run CrisperWhisper on a video file for verbatim transcription.
 
     CrisperWhisper preserves filler words (um, uh), stutters, false starts,
@@ -103,10 +122,15 @@ def transcribe_crisper(video_path, language="en", output_dir=None,
         language: Language code (default: en).
         output_dir: Directory for output files (default: same as video).
         progress_callback: Optional callable(message) for progress updates.
+        device: 'auto' (default; uses Apple-Silicon GPU/mps when available),
+            or an explicit torch device string like 'cpu', 'mps', 'cuda'.
 
     Returns:
         Tuple of (json_path, srt_path, orig_srt_path).
     """
+    # Let unsupported ops fall back to CPU instead of erroring on MPS.
+    import os as _os
+    _os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
     video = Path(video_path).resolve()
     if not video.exists():
         msg = f"Error: Video file not found: {video}"
@@ -128,15 +152,29 @@ def transcribe_crisper(video_path, language="en", output_dir=None,
         import torch
         from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
     except ImportError as e:
-        raise RuntimeError(
-            f"CrisperWhisper requires additional dependencies: {e}\n"
-            "Install with: pip install torch torchaudio "
-            "git+https://github.com/nyrahealth/transformers.git@crisper_whisper"
-        )
+        # The CrisperWhisper transformers fork pins strict dependency ranges that
+        # may not match newer tokenizers/huggingface-hub versions. If the error is
+        # just a version-range complaint, bypass the check and retry.
+        if "is required for a normal functioning" in str(e):
+            _progress("Bypassing transformers version check (compatible fork detected)...")
+            import importlib.util as _ilu, sys as _sys
+            _spec = _ilu.find_spec("transformers.utils.versions")
+            _vmod = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(_vmod)
+            _vmod.require_version_core = lambda *a, **kw: None
+            _sys.modules["transformers.utils.versions"] = _vmod
+            from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
+        else:
+            raise RuntimeError(
+                f"CrisperWhisper requires additional dependencies: {e}\n"
+                "Install with: pip install torch torchaudio "
+                "git+https://github.com/nyrahealth/transformers.git@crisper_whisper"
+            )
 
     model_id = "nyrahealth/CrisperWhisper"
-    device = "cpu"
-    torch_dtype = torch.float32
+    device = _pick_device(device)
+    torch_dtype = torch.float32  # float16 is unreliable for timestamps on mps
+    _progress(f"Using device: {device}")
 
     _progress("Downloading/loading model weights (this may take a while on first run)...")
     model = AutoModelForSpeechSeq2Seq.from_pretrained(
@@ -153,13 +191,67 @@ def transcribe_crisper(video_path, language="en", output_dir=None,
         tokenizer=processor.tokenizer,
         feature_extractor=processor.feature_extractor,
         torch_dtype=torch_dtype,
-        device=device,
+        device=torch.device(device),
     )
+
+    # Legacy compatibility patch: some older transformers returned tuples in
+    # generate() outputs that the CrisperWhisper fork couldn't .cpu(). Modern
+    # transformers (>=4.x) handle this natively via a _postprocess_outputs that
+    # takes a `decoder_input_ids` argument — applying the old patch there breaks
+    # generation, so only patch when the native method lacks that parameter.
+    try:
+        import inspect as _inspect
+        from transformers.models.whisper import generation_whisper as _gw
+
+        _native_params = _inspect.signature(
+            _gw.WhisperGenerationMixin._postprocess_outputs
+        ).parameters
+        _needs_patch = "decoder_input_ids" not in _native_params
+
+        def _patched_postprocess(self_model, seek_outputs, return_token_timestamps, generation_config):
+            if return_token_timestamps and hasattr(generation_config, "alignment_heads"):
+                num_frames = getattr(generation_config, "num_frames", None)
+                seek_outputs["token_timestamps"] = self_model._extract_token_timestamps(
+                    seek_outputs, generation_config.alignment_heads, num_frames=num_frames
+                )
+
+            if generation_config.return_dict_in_generate:
+                def split_by_batch_index(values, key, batch_idx):
+                    if key == "scores":
+                        return [v[batch_idx].cpu() for v in values]
+                    if key == "past_key_values":
+                        return None
+                    # Handle tuples that lack .cpu() — convert element to tensor first
+                    val = values[batch_idx]
+                    if isinstance(val, tuple):
+                        try:
+                            val = torch.stack(val)
+                        except Exception:
+                            return val
+                    if hasattr(val, 'cpu'):
+                        return val.cpu()
+                    return val
+
+                sequence_tokens = seek_outputs["sequences"]
+                seek_outputs = [
+                    {k: split_by_batch_index(v, k, i) for k, v in seek_outputs.items()}
+                    for i in range(sequence_tokens.shape[0])
+                ]
+            else:
+                sequence_tokens = seek_outputs
+
+            return sequence_tokens, seek_outputs
+
+        if _needs_patch:
+            _gw.WhisperGenerationMixin._postprocess_outputs = _patched_postprocess
+    except Exception:
+        pass  # If patching fails, proceed anyway — may work without it
 
     _progress(f"Transcribing {video.name} (verbatim mode)...")
     result = pipe(
         str(video),
         return_timestamps="word",
+        chunk_length_s=30,
         generate_kwargs={"language": language},
     )
 

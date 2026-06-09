@@ -2,9 +2,11 @@
 
 ## Project Overview
 
-A browser-based transcript editing tool for video and audio. Users transcribe media via WhisperX (or CrisperWhisper), cut/reorder/edit blocks in a two-pane UI, and export as FCPXML (Final Cut Pro / DaVinci Resolve), Premiere XML, or re-encoded video/audio via ffmpeg.
+A transcript-based editing tool for video and audio. Transcribe media via CrisperWhisper (verbatim — keeps fillers + repeats) or WhisperX, then cut/edit, and export as FCPXML (Final Cut Pro / DaVinci Resolve), Premiere XML, or re-encoded media via ffmpeg.
 
-**Primary interface:** `python3 web_gui.py` → browser GUI at localhost:5000
+**Two interfaces, one export core (`papercut_core.py`):**
+- **Batch / headless (`batch.py`)** — primary for Claude-driven editing of many files. Transcribe a directory, Claude edits the SRTs, export FCP XMLs next to each source. See `EDITING_PROTOCOL.md`.
+- **Browser GUI (`python3 web_gui.py`)** — two-pane interactive editor at localhost:5000.
 
 ## Architecture
 
@@ -25,29 +27,45 @@ On export:
 
 | File | Purpose |
 |---|---|
-| `web_gui.py` | Flask backend — upload, transcribe (SSE), diff, export endpoints |
+| `batch.py` | Headless batch driver — `transcribe` / `export` / `status` over a directory |
+| `papercut_core.py` | Shared export core — `export_from_srt()`, `export_from_blocks()`, `resolve_word_edits()`; used by both GUI and batch |
+| `EDITING_PROTOCOL.md` | How Claude edits SRTs (keep-last-of-repeats, flagging, sense-check) |
+| `web_gui.py` | Flask backend — upload, transcribe (SSE), diff, export (delegates to `papercut_core`) |
 | `static/index.html` | Full single-page editor UI |
 | `static/landing.html` | Marketing landing page |
 | `silence.py` | Silence detection: `detect_silence()`, `apply_margin()`, `get_kept_ranges()` |
 | `timeline_export.py` | `Clip` dataclass, `build_clip_list()`, `generate_fcpxml()`, `generate_premiere_xml()`, `export_video()` |
 | `transcript_diff.py` | SRT parser, WhisperX JSON loader, deleted range detection |
-| `merge_cutlists.py` | Legacy auto-editor command builder (no longer used by web GUI) |
 | `auto_transcript.py` | WhisperX/CrisperWhisper wrapper for transcription |
-| `main.py` | CLI orchestrator (legacy, wraps the old pipeline) |
+| `main.py` | Single-file CLI (transcribe / edit / export via `papercut_core`) |
+| `merge_cutlists.py` | Dead legacy auto-editor builder — not imported anywhere |
 
 ## Tech Stack
 
-- Python 3.13+ (Homebrew), Flask
-- Dependencies: `numpy`, `whisperx`, `flask` (see `requirements.txt`)
-- WhisperX requires Python 3.12: `pipx reinstall whisperx --python /opt/homebrew/bin/python3.12`
-- FFmpeg must be installed (`brew install ffmpeg`)
-- No auto-editor dependency — silence detection and export are handled natively
+- FFmpeg required (`brew install ffmpeg`). No auto-editor dependency.
+- **CrisperWhisper venv (`.venv-crisper/`, gitignored)** — verbatim engine. Run batch.py/main.py with `.venv-crisper/bin/python`. Recipe:
+  ```bash
+  /opt/homebrew/bin/python3.12 -m venv .venv-crisper
+  .venv-crisper/bin/python -m pip install torch torchaudio accelerate safetensors librosa soundfile numpy
+  .venv-crisper/bin/python -m pip install "git+https://github.com/nyrahealth/transformers.git@crisper_whisper"
+  ```
+  The nyrahealth transformers fork (v4.37.2) is REQUIRED — stock transformers' word-timestamp extraction is incompatible with CrisperWhisper. `auto_transcript.py` auto-applies a `_postprocess_outputs` patch only when the fork is detected (guarded by signature inspection).
+- WhisperX (optional engine) lives in its own pipx venv (Python 3.12).
 
 ## Running
 
 ```bash
-python3 web_gui.py --port 5009          # start on custom port
-python3 web_gui.py                       # default: localhost:5000
+# Batch (headless) — primary for Claude. Run under the venv:
+.venv-crisper/bin/python batch.py transcribe <dir>   # verbatim transcripts
+.venv-crisper/bin/python batch.py status <dir>       # show pipeline state
+.venv-crisper/bin/python batch.py export <dir>       # FCP XMLs next to sources
+
+# Single file:
+.venv-crisper/bin/python main.py video.mp4 --transcribe-only
+.venv-crisper/bin/python main.py video.mp4 --export final-cut-pro
+
+# Browser GUI:
+python3 web_gui.py --port 5009
 ```
 
 ## Export Details

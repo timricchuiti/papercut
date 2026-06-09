@@ -1602,7 +1602,6 @@ function renderEditPane() {
         <div class="block-text">${escHtml(b.originalText)}</div>
       `;
     } else {
-      card.draggable = true;
       card.innerHTML = `
         <div class="block-meta">
           <div class="block-meta-left">
@@ -2144,6 +2143,27 @@ function toggleSettings() {
 // Apply saved settings on load
 applySettings();
 
+// ── Engine availability check ──
+fetch("/api/engines")
+  .then(r => r.json())
+  .then(engines => {
+    const sel = document.getElementById("settTranscriptionEngine");
+    for (const opt of sel.options) {
+      const eng = engines[opt.value];
+      if (eng && !eng.available) {
+        opt.disabled = true;
+        opt.textContent += " (not installed)";
+      }
+    }
+    // If the currently selected engine is unavailable, switch to the first available one
+    if (sel.selectedOptions[0] && sel.selectedOptions[0].disabled) {
+      for (const opt of sel.options) {
+        if (!opt.disabled) { sel.value = opt.value; updateEngineFields(); break; }
+      }
+    }
+  })
+  .catch(() => {}); // Silently ignore if server is unreachable
+
 // ── Export ──
 function startExport() {
   if (!videoPath) return;
@@ -2158,10 +2178,13 @@ function startExport() {
     id: b.id,
     start: b.start,
     end: b.end,
+    text: b.text,
+    originalText: b.originalText,
   }));
 
   const payload = {
     video_path: videoPath,
+    json_path: jsonPath,
     ordered_blocks: orderedBlocks,
     margin: parseFloat($marginSlider.value),
     export: document.getElementById("exportFormat").value,
@@ -2802,7 +2825,16 @@ function syncFreeEditToBlocks() {
 let dragSourceId = null;
 
 function bindDragEvents(card) {
+  // Only allow dragging when initiated from the drag handle
+  const handle = card.querySelector(".drag-handle");
+  if (handle) {
+    handle.addEventListener("mousedown", () => { card.draggable = true; });
+    handle.addEventListener("mouseup", () => { card.draggable = false; });
+  }
+
   card.addEventListener("dragstart", (e) => {
+    // Only allow drag from handle
+    if (!card.draggable) { e.preventDefault(); return; }
     dragSourceId = parseInt(card.dataset.id);
     card.classList.add("dragging");
     e.dataTransfer.effectAllowed = "move";
@@ -2811,6 +2843,7 @@ function bindDragEvents(card) {
 
   card.addEventListener("dragend", () => {
     card.classList.remove("dragging");
+    card.draggable = false;
     dragSourceId = null;
     $editPane.querySelectorAll(".drag-over-above, .drag-over-below").forEach(c => {
       c.classList.remove("drag-over-above", "drag-over-below");

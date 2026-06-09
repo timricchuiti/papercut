@@ -1,0 +1,7 @@
+.venv-crisper/
+__pycache__/
+*.pyc
+test_media/
+papercuticon.pxd
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
