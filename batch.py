@@ -20,6 +20,7 @@ and the numpy-based export both have their dependencies.
 """
 
 import argparse
+import subprocess
 import sys
 import traceback
 from pathlib import Path
@@ -96,8 +97,6 @@ def file_state(media):
 # ---------------------------------------------------------------------------
 
 def cmd_transcribe(args):
-    from auto_transcript import transcribe
-
     media = find_media(args.directory)
     if not media:
         print(f"No media files found in {args.directory}", file=sys.stderr)
@@ -118,22 +117,39 @@ def cmd_transcribe(args):
         print("Nothing to transcribe.")
         return 0
 
-    print(f"\nTranscribing {len(todo)} file(s) with engine={args.engine}...\n")
+    # Transcribe each file in its OWN subprocess. CrisperWhisper holds the model
+    # (and a lot of intermediate memory) for the life of the process; running all
+    # files in one process let that accumulate until the machine swap-thrashed and
+    # the last files crawled. A fresh subprocess per file is torn down on exit, so
+    # the OS reclaims everything between files and each runs at the warm rate.
+    auto_script = str(Path(__file__).resolve().parent / "auto_transcript.py")
+
+    print(f"\nTranscribing {len(todo)} file(s) with engine={args.engine} "
+          f"(isolated subprocess per file)...\n")
     ok, failed = 0, []
     for i, m in enumerate(todo, 1):
-        print(f"[{i}/{len(todo)}] {m.name}")
+        print(f"[{i}/{len(todo)}] {m.name}", flush=True)
+        cmd = [
+            sys.executable, auto_script, str(m),
+            "--engine", args.engine,
+            "--language", args.language,
+            "--model", args.model,
+            "--output-dir", str(m.parent),
+        ]
         try:
-            transcribe(str(m), model=args.model, language=args.language,
-                       output_dir=str(m.parent), engine=args.engine)
-            ok += 1
-        except SystemExit as e:  # auto_transcript calls sys.exit on hard errors
-            failed.append((m.name, f"exit {e.code}"))
-            print(f"  ERROR: transcription exited ({e.code})", file=sys.stderr)
+            result = subprocess.run(cmd)
+            rc = result.returncode
         except Exception as e:
             failed.append((m.name, str(e)))
-            print(f"  ERROR: {e}", file=sys.stderr)
-            if args.verbose:
-                traceback.print_exc()
+            print(f"  ERROR: could not launch transcription: {e}", file=sys.stderr)
+            continue
+
+        # Trust the on-disk result, not just the exit code.
+        if rc == 0 and file_state(m)["transcribed"]:
+            ok += 1
+        else:
+            failed.append((m.name, f"exit {rc}"))
+            print(f"  ERROR: transcription subprocess failed (exit {rc})", file=sys.stderr)
 
     print(f"\nDone: {ok} ok, {len(failed)} failed.")
     for name, err in failed:
