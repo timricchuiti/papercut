@@ -1,92 +1,137 @@
 # PaperCut Editing Protocol (for Claude)
 
-How Claude edits transcripts in the headless batch workflow. The goal: hand Tim
-FCP XMLs that are basically ready, with anything uncertain clearly flagged.
+How Claude edits transcripts in the headless batch workflow. Goal: hand Tim FCP
+XMLs that are basically ready, with anything uncertain clearly flagged. This file
+is the durable record of the editing methodology — edit the way it's written here
+rather than re-deriving it each session.
 
 ## The loop
 
 ```
-batch.py transcribe <dir>     # verbatim transcripts (CrisperWhisper)
+batch.py transcribe <dir>     # verbatim transcripts (CrisperWhisper), one
+                              #   subprocess per file (memory reclaimed between)
   → Claude edits each <stem>.srt + writes <stem>.notes.md
-batch.py export <dir>         # FCP XMLs next to each source file
-  → Claude reads papercut_batch_report.md + notes for sense
+batch.py export <dir>         # OR per file: main.py … --export final-cut-pro
+  → Claude reads the report + notes for sense
 ```
 
-Run everything under the CrisperWhisper venv:
-`.venv-crisper/bin/python batch.py ...`
+Run everything under the CrisperWhisper venv: `.venv-crisper/bin/python …`.
+**Export margin: `--margin 0.12`** (Tim's current setting; was 0.1).
+Output `<stem>_ALTERED.fcpxml` + `<stem>.notes.md` next to the source `.mp4`,
+referencing the original. Leave `<stem>.srt.orig` untouched (diff baseline).
+
+Memory note: a fresh machine (low swap) transcribes at warm rate (~1.7× realtime
+after the first file's GPU warmup). If swap is already high from prior runs,
+transcription thrashes — a reboot or `sudo purge` before a big batch fixes it.
 
 ## What Claude edits
 
-For each `<stem>.srt`:
+Per `<stem>.srt`: delete flubbed/duplicate blocks, trim within-block flubs with
+`[[CUT]]…[[/CUT]]` markers, and **never edit the timestamps** — timing comes from
+the word-level JSON. Then write `<stem>.notes.md` and sense-check.
 
-1. **Delete flubs.** Remove false starts, misspeaks, or aborted sentences —
-   either by deleting the whole block, or with cut markers (below).
-2. **Repeated takes → keep the LAST.** When a sentence/fragment is said 2–3×
-   in a row, keep the final clean take and remove the earlier ones. This works
-   **whether the takes are in separate blocks or the same block** (see below).
-3. **Trim fillers / stray words within a block** by deleting just those words
-   from the block's text. CrisperWhisper marks fillers like `[UM]`, `[UH]` —
-   easy to spot and delete.
-4. **Never edit timestamps.** Timing comes from the word-level JSON; only change
-   text, add cut markers, or delete whole blocks.
-5. **Leave `<stem>.srt.orig` untouched** — it's the diff baseline.
+## THE core rule: keep the LAST take
 
-## Two ways to cut, both keep-the-last-take correct
+When Tim records live and flubs, he immediately re-says it. **The later take is
+always the keeper** — earlier takes are throwaways. This holds whether the takes
+are in separate blocks or the same block.
 
-The exporter resolves edits against CrisperWhisper's **word-level timestamps**,
-so it knows the exact time of every word — including repeated ones.
+### Recognizing a re-take
+- **Proximity.** Re-takes almost always land within ~15–30 seconds of each
+  other — usually back-to-back blocks, sometimes within one block. That tight
+  spacing is the signal to look for a keeper.
+- **Exact OR adjusted.** A re-take may be word-for-word ("That's when we call it
+  a multiple." ×3) **or slightly adjusted** — and the adjusted case is the common
+  one: a corrected number ("…is 24, sorry, 28"), a relabel ("the first → the
+  second component"), a rephrase ("we'll determine → we'll learn how to
+  determine"), or a fuller version of a partial. Treat all of these as re-takes:
+  keep the last.
+- **Partial → full (multi-block).** A clipped false start ("To figure that out,
+  we can divide 42.") immediately followed by the full sentence ("To figure that
+  out, we can divide 42 by fourteen, and…") → delete the partial, keep the full.
+- **Stacked partials building to a full take.** Several restarts that assemble
+  into one clean sentence ("You might notice / you might have noticed that when…")
+  → keep the final complete take, delete the build-up.
 
-**(a) Cut markers — preferred for same-block flub-and-correction.** Leave the
-text verbatim and wrap the part to remove in `[[CUT]]…[[/CUT]]`. Because nothing
-else changes, every word maps 1:1 to its timestamp and the cut is exact and
-self-documenting (Tim can see precisely what was removed). Example — flubbed
-"four", corrected to "two", all in one block:
+### The ONE exception — keep-last when the last take is clean
+If the **last** take contains a content/math error and an **earlier** take is
+correct, keep the correct earlier take and **flag it loudly** in notes ("I broke
+keep-the-last here on purpose because the last take mislabeled X"). Tim wants the
+last take *and* a correct video; correctness wins, but he must be told.
+(Real examples: a stuttered final "that's when that's when…"; a product-rule
+re-take that called the 2nd component "the first"; keep the clean/correct one.)
 
-```
-The derivative is [[CUT]]four X. No wait. The derivative is[[/CUT]] two X.
-```
-→ keeps "The derivative is two X." (the correction).
+## Two ways to cut (both resolve "keep last")
 
-**(b) Plain deletion — fine for whole takes / lines.** Just delete the words you
-don't want. When a fragment repeats, the matcher resolves **rightmost (keep the
-last occurrence)**, so deleting down to one copy of a repeated sentence keeps the
-final take, not the first. Whole-block deletion is the cleanest form of this.
+1. **`[[CUT]]…[[/CUT]]` markers — preferred for same-block / surgical cuts.**
+   Leave the text verbatim and wrap exactly the words to remove. Because the text
+   stays 1:1 with the word-level JSON, each marked word maps to its exact
+   timestamp — no fuzzy matching, and Tim can see precisely what was removed.
+   Multiple cut spans per block are fine. **Reproduce the block's original text
+   exactly** (only insert the markers); if the token count drifts, the exporter
+   falls back to fuzzy matching.
+2. **Plain deletion — fine for whole takes / lines.** Delete the words you don't
+   want; when a fragment repeats, the matcher resolves **rightmost**, so deleting
+   down to one copy keeps the last occurrence. Whole-block deletion is the
+   cleanest form.
 
-Rule of thumb: **whole-block delete** for cleanly separated takes; **`[[CUT]]`
-markers** when a flub and its correction live in the same block (your most common
-case). Both are non-destructive — Tim expands anything in FCP later.
+## What else to cut (besides re-takes)
 
-## Flagging (write to `<stem>.notes.md`)
+- **Fillers:** CrisperWhisper marks them `[UM]` / `[UH]`. Trim them (usually a
+  within-block marker around the filler word).
+- **Doubled words / stutters:** "is is", "at at", "the the", "to to". Cut one.
+- **False starts / abandoned fragments:** "So,", "We can then move.", "Seven
+  time—" → delete or trim.
+- **Director's / meta notes left in the recording.** Tim sometimes talks to
+  himself on tape: "this is where I cut in the other bit, blah blah blah," or
+  "That's an insert, Tim, if the transcriber/LLM did…". These are NOT lesson
+  content — cut them, and **flag the spot** in case it marks where Tim plans to
+  splice separately-recorded footage.
 
-Create `<stem>.notes.md` per file. Log every non-obvious decision:
+## What NOT to touch
 
-```markdown
-# Notes — <stem>
+- **Transcription artifacts are display-only — the audio is the truth.** Do not
+  try to "fix" them and do not let them drive a cut:
+  - Garbled numbers ("342 goes into a 1263 times" for "3. 42 goes into 126, 3
+    times"; "negative 128th" for "−1/28").
+  - Mis-hearings ("natural algorithm" for "logarithm", "Even the function" for
+    "Given the function").
+  - Glued stutter tokens you can't split cleanly ("denomindenominator", "6x toto
+    the third", "numeratornow"). Leave them; optionally note.
+- **Math.** Verify every result, but **flag-not-fix** — never silently "correct"
+  a misspeak or a wrong number. Surface it in notes and let Tim decide.
 
-## Cuts made
-- 00:01:12 deleted false start "so the the—"
-- 00:03:40 kept 3rd take of "let's define the integral", deleted 2 earlier
+## Useful signals in the data
 
-## ⚠ Flags (Tim, please check)
-- 00:05:20 — two takes both look clean; kept the 2nd. Verify which you want.
-- 00:07:05 — unclear if the aside about notation should stay.
+- **Reversed / corrupt SRT timestamps** (end before start) almost always mark a
+  flub take — they're safe deletion candidates (the exporter would skip them
+  anyway). Kept blocks should have clean forward timestamps; the word-level JSON
+  is reliable even when the segment SRT line is messy.
+- **A long no-speech gap** between two blocks usually = Tim working/writing on
+  screen silently. That dead air gets trimmed automatically (non-destructive). If
+  a needed word seems to fall in the gap (e.g. a stated answer that never appears
+  in the audio), **flag it** — the on-screen visual may cover it, but confirm.
 
-## Sense check
-- Reads coherently start to finish. No obvious gaps.
-- (or) Possible over-cut around 00:09: topic jumps from X to Z.
-```
+## Flagging — write to `<stem>.notes.md`
+
+One per file. Sections: **Deletions** (what & why, with timestamps),
+**Within-block trims**, **⚠ Flags** (anything uncertain or any suspected
+content/math issue — flag-not-fix), and **Sense check** (does it read end to end;
+note the per-example math is intact). Lead with the flags when the file needs
+real review (meta-notes, broken keep-last, missing answer, etc.).
 
 ## Sense check (after editing, and after export)
 
 - Re-read the edited transcript end to end. Does it flow? Anything missing?
-- After export, read `papercut_batch_report.md`. Investigate any
-  **OVER-CUT** (>60% removed) or **almost-nothing-cut** (<2%) warning.
-- Cuts are non-destructive: Tim can expand any cut in FCP later, so when unsure
-  whether to cut, **flag it and lean toward keeping** rather than dropping
+- After export, the pipeline runs an automatic **output check** — it warns if any
+  clip is ≤4 frames or any clip boundary fails to tile. It should never fire;
+  if it does, something regressed — investigate before delivering.
+- Cuts are non-destructive (Tim expands any cut in FCP later), so when genuinely
+  unsure whether to cut, **flag and lean toward keeping** rather than dropping
   content silently.
 
-## Optional automation (not built yet)
+## Reduction is usually high — that's fine
 
-A Python pre-pass could propose obvious cuts (strip `[UM]/[UH]`, collapse
-consecutive identical takes) for Claude to review — faster, same flagging. Ask
-Tim before relying on it; editing judgment stays with Claude.
+Tim's raw recordings are ~40–60% dead air + flubs (he pauses while interacting
+with the screen). A 40–55% reduction is normal and not a sign of over-cutting.
+Judge over-cut by whether real *content* survives, not by the percentage.
