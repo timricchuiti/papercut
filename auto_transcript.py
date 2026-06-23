@@ -111,7 +111,7 @@ def _pick_device(prefer="auto"):
 
 
 def transcribe_crisper(video_path, language="en", output_dir=None,
-                       progress_callback=None, device="auto"):
+                       progress_callback=None, device="auto", chunk_length_s=30):
     """Run CrisperWhisper on a video file for verbatim transcription.
 
     CrisperWhisper preserves filler words (um, uh), stutters, false starts,
@@ -251,7 +251,7 @@ def transcribe_crisper(video_path, language="en", output_dir=None,
     result = pipe(
         str(video),
         return_timestamps="word",
-        chunk_length_s=30,
+        chunk_length_s=chunk_length_s,
         generate_kwargs={"language": language},
     )
 

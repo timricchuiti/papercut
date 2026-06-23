@@ -123,16 +123,20 @@ def _match_rightmost(edited_words, block_words):
     return [(block_words[i]["start"], block_words[i]["end"]) for i in kept_idx]
 
 
-def resolve_word_edits(ordered_blocks, whisper_data, margin):
+def resolve_word_edits(ordered_blocks, whisper_data, margin, warnings=None):
     """For edited blocks, use word-level timestamps to create sub-block ranges.
 
     Three cases per block:
       1. Not edited -> keep the whole block.
       2. Has [[CUT]] markers -> drop exactly the marked words (positional, exact)
-         when the token count matches the block's words; otherwise fall back to
-         (3) on the cut-stripped text.
-      3. Free-text edit -> keep the surviving words, matched RIGHTMOST so that
-         repeated takes resolve to the LAST occurrence (keep-the-correction).
+         when the token count matches the block's words. If it does NOT match,
+         a [[CUT]] cannot be placed precisely, so the block is kept WHOLE and a
+         warning is appended to `warnings` (never a silent fuzzy cut that could
+         remove the wrong words).
+      3. Free-text edit (no markers) -> keep the surviving words, matched RIGHTMOST
+         so that repeated takes resolve to the LAST occurrence.
+
+    `warnings`: optional list; marker-placement failures are appended to it.
 
     Args:
         ordered_blocks: dicts with 'start', 'end', 'text', optional 'originalText'.
@@ -184,8 +188,22 @@ def resolve_word_edits(ordered_blocks, whisper_data, margin):
                     if not is_cut
                 ]
             else:
-                # Token/word mismatch — strip cut spans and fall back to (3).
-                text = " ".join(tok for tok, is_cut in toks if not is_cut)
+                # Marker tokens don't line up 1:1 with the audio's words (usually
+                # an oddly-tokenized word: a glued stutter, an [UM], or a split
+                # number). A [[CUT]] can't be placed exactly, and fuzzy-cutting
+                # risks removing the WRONG words — so keep the block WHOLE and warn
+                # so the edit gets fixed by hand instead of silently mis-cut.
+                if warnings is not None:
+                    mm = int(block["start"] // 60)
+                    ss = block["start"] - mm * 60
+                    snip = re.sub(r"\s+", " ", text).strip()
+                    snip = (snip[:64] + "…") if len(snip) > 64 else snip
+                    warnings.append(
+                        f"[[CUT]] at {mm}:{ss:05.2f} not placed (token/word "
+                        f"mismatch) — block kept WHOLE, fix by hand: \"{snip}\""
+                    )
+                resolved.append({"start": block["start"], "end": block["end"]})
+                continue
 
         # (3) Rightmost free-text match (keep-last).
         if kept_word_times is None:
@@ -203,17 +221,19 @@ def resolve_word_edits(ordered_blocks, whisper_data, margin):
 
 
 def build_clips(video, ordered_blocks, whisper_data, margin=0.1,
-                threshold=DEFAULT_THRESHOLD, media_info=None):
+                threshold=DEFAULT_THRESHOLD, media_info=None, warnings=None):
     """Resolve edits + silence-detect + build the final clip list.
 
     Returns (clips, media_info). Raises ValueError if no clips result.
+    `warnings`: optional list for marker-placement failures (see resolve_word_edits).
     """
     video = Path(video)
     if media_info is None:
         media_info = get_media_info(str(video))
     frame_rate = media_info["frame_rate"]
 
-    resolved_blocks = resolve_word_edits(ordered_blocks, whisper_data, margin)
+    resolved_blocks = resolve_word_edits(ordered_blocks, whisper_data, margin,
+                                         warnings=warnings)
 
     is_loud = detect_silence(str(video), threshold=threshold, frame_rate=frame_rate,
                              sample_rate=media_info["sample_rate"])
@@ -287,8 +307,11 @@ def export_from_blocks(video, ordered_blocks, whisper_data=None,
     if edit_method:
         threshold = parse_threshold(edit_method, threshold)
 
+    # Collect [[CUT]]-placement warnings while resolving edits.
+    warnings = []
     clips, media_info = build_clips(video, ordered_blocks, whisper_data,
-                                    margin=margin, threshold=threshold)
+                                    margin=margin, threshold=threshold,
+                                    warnings=warnings)
 
     if output_path is None:
         output_path = resolve_output_path(video, export_format, export_folder)
@@ -297,10 +320,9 @@ def export_from_blocks(video, ordered_blocks, whisper_data=None,
                  ffmpeg_args=ffmpeg_args)
 
     # Guardrail: scan the written FCPXML for tiny clips / tiling errors.
-    warnings = []
     if export_format in ("final-cut-pro", "resolve"):
         try:
-            warnings = validate_fcpxml(Path(output_path).read_text(encoding="utf-8"))
+            warnings += validate_fcpxml(Path(output_path).read_text(encoding="utf-8"))
         except OSError:
             pass
 
