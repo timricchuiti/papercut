@@ -117,7 +117,6 @@ papercut/
 ├── web_gui.py             # Web GUI server (primary interface)
 ├── auto_transcript.py     # WhisperX transcription wrapper
 ├── transcript_diff.py     # Diff engine — detects deleted blocks
-├── merge_cutlists.py      # Builds auto-editor commands with cut ranges
 ├── main.py                # CLI orchestrator (full pipeline)
 ├── static/
 │   └── index.html         # Web GUI frontend (single-file HTML/CSS/JS)
