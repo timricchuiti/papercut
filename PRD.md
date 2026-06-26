@@ -97,7 +97,6 @@
 | --- | --- |
 | `auto_transcript.py` | Wrapper for WhisperX transcript generation. |
 | `transcript_diff.py` | Diffs original vs. edited transcript and generates cut ranges. |
-| `merge_cutlists.py` | Merges transcript cuts with Auto‑Editor cuts. |
 | `main.py` | CLI tool to orchestrate the full pipeline. |
 | `export/` | Directory utilizing Auto‑Editor’s existing exporters. |
 

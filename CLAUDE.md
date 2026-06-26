@@ -38,7 +38,6 @@ On export:
 | `transcript_diff.py` | SRT parser, WhisperX JSON loader, deleted range detection |
 | `auto_transcript.py` | WhisperX/CrisperWhisper wrapper for transcription |
 | `main.py` | Single-file CLI (transcribe / edit / export via `papercut_core`) |
-| `merge_cutlists.py` | Dead legacy auto-editor builder — not imported anywhere |
 
 ## Tech Stack
 
