@@ -201,19 +201,6 @@ def _fcp_format_name(width, height, fr_num, fr_den):
     return "FFVideoFormatRateUndefined"
 
 
-def _seconds_to_rational(seconds, frame_rate_num, frame_rate_den):
-    """Convert seconds to FCPXML rational time string snapped to frame boundaries.
-
-    FCPXML requires all times to be exact multiples of the frame duration.
-    Frame duration = frame_rate_den / frame_rate_num seconds.
-    So we express time as: (frame_count * frame_rate_den) / frame_rate_num seconds.
-    """
-    # Convert seconds to frame count (snap to nearest frame)
-    frame_count = round(seconds * frame_rate_num / frame_rate_den)
-    numerator = frame_count * frame_rate_den
-    return f"{numerator}/{frame_rate_num}s"
-
-
 def generate_fcpxml(media_path, clips, media_info):
     """Generate FCPXML 1.11 string for Final Cut Pro / DaVinci Resolve.
 
@@ -226,7 +213,6 @@ def generate_fcpxml(media_path, clips, media_info):
         FCPXML string.
     """
     p = Path(media_path)
-    filename = p.name
     fr_num = media_info["frame_rate_num"]
     fr_den = media_info["frame_rate_den"]
     has_video = media_info["has_video"]
@@ -357,7 +343,7 @@ def generate_premiere_xml(media_path, clips, media_info):
         if has_video:
             video_clips.append(clip_xml)
         if has_audio:
-            audio_clips.append(clip_xml.replace("clipitem", "clipitem").replace(
+            audio_clips.append(clip_xml.replace(
                 f'id="clipitem-{i}"', f'id="clipitem-audio-{i}"'
             ))
 
