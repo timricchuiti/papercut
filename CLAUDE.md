@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-A transcript-based editing tool for video and audio. Transcribe media via CrisperWhisper (verbatim — keeps fillers + repeats) or WhisperX, then cut/edit, and export as FCPXML (Final Cut Pro / DaVinci Resolve), Premiere XML, or re-encoded media via ffmpeg.
+A transcript-based editing tool for video and audio. Transcribe media verbatim (keeps fillers + repeats) — by default via the **MLX engine** (CrisperWhisper's weights through Apple MLX, ~15-30x faster), or the transformers CrisperWhisper / WhisperX engines — then cut/edit, and export as FCPXML (Final Cut Pro / DaVinci Resolve), Premiere XML, or re-encoded media via ffmpeg.
 
 **Two interfaces, one export core (`papercut_core.py`):**
 - **Batch / headless (`batch.py`)** — primary for Claude-driven editing of many files. Transcribe a directory, Claude edits the SRTs, export FCP XMLs next to each source. See `EDITING_PROTOCOL.md`.
@@ -36,13 +36,16 @@ On export:
 | `silence.py` | Silence detection: `detect_silence()`, `apply_margin()`, `get_kept_ranges()` |
 | `timeline_export.py` | `Clip` dataclass, `build_clip_list()`, `generate_fcpxml()`, `generate_premiere_xml()`, `export_video()` |
 | `transcript_diff.py` | SRT parser, WhisperX JSON loader, deleted range detection |
-| `auto_transcript.py` | WhisperX/CrisperWhisper wrapper for transcription |
+| `auto_transcript.py` | Engine dispatcher — `mlx` (default, shells out to `mlx_transcribe.py`), `crisperwhisper` (in-process transformers), `whisperx` |
+| `mlx_transcribe.py` | **MLX engine** (default) — runs CrisperWhisper weights via Apple MLX, ~15-30x faster; sets alignment heads + CrisperWhisper word-grouping. Runs under `.venv-mlx`. |
+| `setup_mlx.sh` | One-time MLX setup: build `.venv-mlx`, convert CrisperWhisper → MLX fp16 at `models/` |
 | `main.py` | Single-file CLI (transcribe / edit / export via `papercut_core`) |
 
 ## Tech Stack
 
 - FFmpeg required (`brew install ffmpeg`). No auto-editor dependency.
-- **CrisperWhisper venv (`.venv-crisper/`, gitignored)** — verbatim engine. Run batch.py/main.py with `.venv-crisper/bin/python`. Recipe:
+- **MLX engine (`.venv-mlx/`, default, gitignored)** — runs CrisperWhisper's weights via Apple MLX, **~15-30x faster** than the transformers/MPS path (a 9-min file in ~30s, no memory thrash) with the same verbatim words + accurate word timestamps. The naive MLX conversion drops two CrisperWhisper-specific things, restored in `mlx_transcribe.py`: (1) **alignment heads** (set from CrisperWhisper's config — without them DTW timestamps are garbage), and (2) **word grouping** (CrisperWhisper marks word boundaries with standalone space tokens, not per-token leading spaces, so stock MLX over-splits — `_crisper_split_to_word_tokens` regroups). `mlx_whisper` is pinned to an mlx-examples commit whose loader reads `model.safetensors` — do NOT `pip install mlx-whisper` (0.4.3 expects the old npz format). Setup: **`./setup_mlx.sh`** (builds the venv + converts the model). `auto_transcript` shells out to `.venv-mlx` for `engine=mlx`.
+- **CrisperWhisper venv (`.venv-crisper/`, gitignored)** — the verbatim transformers engine, now a fallback (`--engine crisperwhisper`). Run batch.py/main.py with `.venv-crisper/bin/python`. Recipe:
   ```bash
   /opt/homebrew/bin/python3.12 -m venv .venv-crisper
   .venv-crisper/bin/python -m pip install torch torchaudio accelerate safetensors librosa soundfile numpy
@@ -54,8 +57,13 @@ On export:
 ## Running
 
 ```bash
-# Batch (headless) — primary for Claude. Run under the venv:
-.venv-crisper/bin/python batch.py transcribe <dir>   # verbatim transcripts
+# One-time: build the MLX engine (default). Then batch.py/main.py use it.
+./setup_mlx.sh
+
+# Batch (headless) — primary for Claude. batch.py/main.py run under .venv-crisper
+# (export needs numpy/ffmpeg); transcribe defaults to engine=mlx and shells out to
+# .venv-mlx automatically. Use --engine crisperwhisper to force the transformers path.
+.venv-crisper/bin/python batch.py transcribe <dir>   # verbatim transcripts (MLX)
 .venv-crisper/bin/python batch.py status <dir>       # show pipeline state
 .venv-crisper/bin/python batch.py export <dir>       # FCP XMLs next to sources
 

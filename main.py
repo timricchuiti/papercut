@@ -67,9 +67,9 @@ def main():
     parser.add_argument("--output", default=None, help="Explicit output path")
 
     # Transcription options
-    parser.add_argument("--engine", default="crisperwhisper",
-                        choices=["crisperwhisper", "whisperx"],
-                        help="Transcription engine (default: crisperwhisper)")
+    parser.add_argument("--engine", default="mlx",
+                        choices=["mlx", "crisperwhisper", "whisperx"],
+                        help="Transcription engine (default: mlx)")
     parser.add_argument("--model", default="medium",
                         help="WhisperX model size (ignored for CrisperWhisper)")
     parser.add_argument("--language", default="en", help="Language code")

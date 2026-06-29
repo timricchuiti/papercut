@@ -16,27 +16,32 @@ from pathlib import Path
 
 
 def transcribe(video_path, model="medium", language="en", output_dir=None,
-               engine="whisperx", progress_callback=None, device="auto"):
+               engine="mlx", progress_callback=None, device="auto"):
     """Run transcription on a video file to produce .json and .srt outputs.
 
     Args:
         video_path: Path to the input video file.
-        model: WhisperX model size (default: medium). Ignored for CrisperWhisper.
+        model: WhisperX model size (default: medium). Ignored for the others.
         language: Language code (default: en).
         output_dir: Directory for output files (default: same as video).
-        engine: Transcription engine — "whisperx" or "crisperwhisper".
+        engine: Transcription engine — "mlx" (default, verbatim + ~15-30x faster),
+            "crisperwhisper" (verbatim transformers/MPS), or "whisperx".
         progress_callback: Optional callable(message) for progress updates.
 
     Returns:
         Tuple of (json_path, srt_path, orig_srt_path).
     """
+    if engine == "mlx":
+        return _transcribe_mlx(video_path, language=language,
+                               output_dir=output_dir,
+                               progress_callback=progress_callback)
     if engine == "crisperwhisper":
         return transcribe_crisper(video_path, language=language,
                                   output_dir=output_dir,
                                   progress_callback=progress_callback,
                                   device=device)
 
-    # Default: WhisperX
+    # WhisperX
     video = Path(video_path).resolve()
     if not video.exists():
         print(f"Error: Video file not found: {video}", file=sys.stderr)
@@ -90,6 +95,42 @@ def transcribe(video_path, model="medium", language="en", output_dir=None,
     print(f"\nEdit {srt_path} to remove unwanted sections, then run main.py to apply cuts.")
 
     return json_path, srt_path, orig_srt_path
+
+
+def _transcribe_mlx(video_path, language="en", output_dir=None, progress_callback=None):
+    """Transcribe via the MLX engine (the default) — ~15-30x faster than the rest.
+
+    MLX's deps are incompatible with the torch/transformers env used elsewhere, so
+    this shells out to mlx_transcribe.py in the dedicated .venv-mlx. Raises if MLX
+    isn't set up (run ./setup_mlx.sh, or pass --engine crisperwhisper).
+    """
+    here = Path(__file__).resolve().parent
+    mlx_py = here / ".venv-mlx" / "bin" / "python"
+    script = here / "mlx_transcribe.py"
+    if not mlx_py.exists() or not (here / "models" / "crisper-mlx-fp16" / "model.safetensors").exists():
+        raise RuntimeError(
+            "MLX engine not set up (.venv-mlx / converted model missing). "
+            "Run ./setup_mlx.sh, or use --engine crisperwhisper.")
+
+    video = Path(video_path).resolve()
+    out_dir = Path(output_dir).resolve() if output_dir else video.parent
+
+    def _progress(msg):
+        print(msg)
+        if progress_callback:
+            progress_callback(msg)
+
+    _progress(f"Transcribing {video.name} via MLX engine...")
+    cmd = [str(mlx_py), str(script), str(video),
+           "--language", language, "--output-dir", str(out_dir)]
+    result = subprocess.run(cmd)
+    if result.returncode != 0:
+        raise RuntimeError(f"MLX transcription failed (exit {result.returncode})")
+
+    stem = video.stem
+    return (out_dir / f"{stem}.json",
+            out_dir / f"{stem}.srt",
+            out_dir / f"{stem}.srt.orig")
 
 
 def _pick_device(prefer="auto"):
@@ -393,9 +434,9 @@ def main():
                         help="Language code (default: en)")
     parser.add_argument("--output-dir", default=None,
                         help="Output directory (default: same as video)")
-    parser.add_argument("--engine", default="whisperx",
-                        choices=["whisperx", "crisperwhisper"],
-                        help="Transcription engine (default: whisperx)")
+    parser.add_argument("--engine", default="mlx",
+                        choices=["mlx", "crisperwhisper", "whisperx"],
+                        help="Transcription engine (default: mlx)")
 
     args = parser.parse_args()
     transcribe(args.video, model=args.model, language=args.language,
