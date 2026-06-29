@@ -135,11 +135,7 @@ def cmd_transcribe(args):
 
     auto_script = str(Path(__file__).resolve().parent / "auto_transcript.py")
 
-    print(f"\nTranscribing {len(todo)} file(s) with engine={args.engine} "
-          f"(isolated subprocess per file)...\n")
-    ok, failed = 0, []
-    for i, m in enumerate(todo, 1):
-        print(f"[{i}/{len(todo)}] {m.name}", flush=True)
+    def _subprocess_one(m):
         cmd = [
             sys.executable, auto_script, str(m),
             "--engine", args.engine,
@@ -147,20 +143,38 @@ def cmd_transcribe(args):
             "--model", args.model,
             "--output-dir", str(m.parent),
         ]
+        rc = subprocess.run(cmd).returncode
+        if rc != 0:
+            raise RuntimeError(f"transcription subprocess failed (exit {rc})")
+
+    return _run_batch(todo, f"engine={args.engine}, isolated subprocess per file",
+                      _subprocess_one, verbose=args.verbose)
+
+
+def _run_batch(todo, label, do_one, verbose=False):
+    """Run do_one(m) over todo with shared progress + failure accounting.
+
+    do_one(m) transcribes one file and raises on failure; a file counts as ok only
+    if it didn't raise AND a transcript landed on disk.
+    """
+    print(f"\nTranscribing {len(todo)} file(s) ({label})...\n")
+    ok, failed = 0, []
+    for i, m in enumerate(todo, 1):
+        print(f"[{i}/{len(todo)}] {m.name}", flush=True)
         try:
-            result = subprocess.run(cmd)
-            rc = result.returncode
+            do_one(m)
         except Exception as e:
             failed.append((m.name, str(e)))
-            print(f"  ERROR: could not launch transcription: {e}", file=sys.stderr)
+            print(f"  ERROR: {e}", file=sys.stderr)
+            if verbose:
+                import traceback
+                traceback.print_exc()
             continue
-
-        # Trust the on-disk result, not just the exit code.
-        if rc == 0 and file_state(m)["transcribed"]:
+        if file_state(m)["transcribed"]:           # trust the on-disk result
             ok += 1
         else:
-            failed.append((m.name, f"exit {rc}"))
-            print(f"  ERROR: transcription subprocess failed (exit {rc})", file=sys.stderr)
+            failed.append((m.name, "no transcript written"))
+            print(f"  ERROR: no transcript written for {m.name}", file=sys.stderr)
 
     print(f"\nDone: {ok} ok, {len(failed)} failed.")
     for name, err in failed:
@@ -169,41 +183,22 @@ def cmd_transcribe(args):
 
 
 def _transcribe_in_process(todo, args):
-    """Transcribe all files in this process so the model/kernels stay warm.
+    """Transcribe all files in one process so the model/kernels stay warm.
 
-    The CrisperWhisper pipeline is cached per-process in auto_transcript, so only
-    the first file pays the load + GPU-warmup cost. Per-file exceptions (incl. the
-    deterministic CrisperWhisper crash) are caught so one bad file doesn't sink the
-    rest; a hard crash, however, ends the whole run (use the default subprocess
-    mode if you need that isolation).
+    Only helps the `crisperwhisper` engine (auto_transcript caches its pipeline
+    per-process, so files 2..N skip the load + GPU-warmup). `mlx` re-spawns a
+    .venv-mlx subprocess per file regardless, and `whisperx` is a CLI call — for
+    those this is equivalent to the default mode. A hard crash ends the whole run
+    (use the default subprocess mode for per-file isolation).
     """
     from auto_transcript import transcribe
 
-    print(f"\nTranscribing {len(todo)} file(s) with engine={args.engine} "
-          f"(in-process, model stays warm)...\n")
-    ok, failed = 0, []
-    for i, m in enumerate(todo, 1):
-        print(f"[{i}/{len(todo)}] {m.name}", flush=True)
-        try:
-            transcribe(str(m), engine=args.engine, language=args.language,
-                       model=args.model, output_dir=str(m.parent))
-        except Exception as e:
-            failed.append((m.name, str(e)))
-            print(f"  ERROR: transcription failed: {e}", file=sys.stderr)
-            if args.verbose:
-                import traceback
-                traceback.print_exc()
-            continue
-        if file_state(m)["transcribed"]:
-            ok += 1
-        else:
-            failed.append((m.name, "no output produced"))
-            print(f"  ERROR: no transcript written for {m.name}", file=sys.stderr)
+    def _in_process_one(m):
+        transcribe(str(m), engine=args.engine, language=args.language,
+                   model=args.model, output_dir=str(m.parent))
 
-    print(f"\nDone: {ok} ok, {len(failed)} failed.")
-    for name, err in failed:
-        print(f"  FAILED {name}: {err}", file=sys.stderr)
-    return 0 if not failed else 2
+    return _run_batch(todo, f"engine={args.engine}, in-process (model stays warm)",
+                      _in_process_one, verbose=args.verbose)
 
 
 # ---------------------------------------------------------------------------
@@ -345,8 +340,9 @@ def build_parser():
                     help="WhisperX model size (ignored for mlx/CrisperWhisper)")
     pt.add_argument("--language", default="en", help="Language code")
     pt.add_argument("--in-process", action="store_true",
-                    help="Transcribe all files in one process (model stays warm; "
-                         "faster on RAM-ample machines). Default: subprocess per file.")
+                    help="Transcribe all files in one process so the model stays "
+                         "warm (crisperwhisper only; no effect for mlx/whisperx). "
+                         "Default: subprocess per file.")
     pt.set_defaults(func=cmd_transcribe)
 
     px = sub.add_parser("export", parents=[common], help="Export edited SRTs")
