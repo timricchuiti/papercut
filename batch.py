@@ -338,11 +338,11 @@ def build_parser():
                         help="Print full tracebacks on error")
 
     pt = sub.add_parser("transcribe", parents=[common], help="Transcribe media")
-    pt.add_argument("--engine", default="crisperwhisper",
-                    choices=["crisperwhisper", "whisperx"],
-                    help="Transcription engine (default: crisperwhisper)")
+    pt.add_argument("--engine", default="mlx",
+                    choices=["mlx", "crisperwhisper", "whisperx"],
+                    help="Transcription engine (default: mlx)")
     pt.add_argument("--model", default="medium",
-                    help="WhisperX model size (ignored for CrisperWhisper)")
+                    help="WhisperX model size (ignored for mlx/CrisperWhisper)")
     pt.add_argument("--language", default="en", help="Language code")
     pt.add_argument("--in-process", action="store_true",
                     help="Transcribe all files in one process (model stays warm; "
