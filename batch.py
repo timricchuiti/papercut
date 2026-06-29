@@ -117,11 +117,22 @@ def cmd_transcribe(args):
         print("Nothing to transcribe.")
         return 0
 
-    # Transcribe each file in its OWN subprocess. CrisperWhisper holds the model
-    # (and a lot of intermediate memory) for the life of the process; running all
-    # files in one process let that accumulate until the machine swap-thrashed and
-    # the last files crawled. A fresh subprocess per file is torn down on exit, so
-    # the OS reclaims everything between files and each runs at the warm rate.
+    # Two transcription modes:
+    #
+    # Subprocess-per-file (default): each file runs in its own process, torn down
+    # on exit so the OS reclaims all memory between files. Essential on a
+    # RAM-constrained machine (model + intermediates accumulating in one process
+    # is what swap-thrashed the old 16GB box), and it isolates the deterministic
+    # CrisperWhisper crash to a single file. Cost: every file reloads the model
+    # AND re-compiles GPU kernels from cold, re-paying the ~3.5x warmup tax.
+    #
+    # In-process (--in-process): all files run in one process, so the model loads
+    # once and the warm GPU kernels are reused — files 2..N run at the ~1.7x warm
+    # rate. Worth it when RAM is ample (the model is ~3GB). Trade-off: a hard
+    # crash takes down the whole run, and memory isn't reclaimed between files.
+    if getattr(args, "in_process", False):
+        return _transcribe_in_process(todo, args)
+
     auto_script = str(Path(__file__).resolve().parent / "auto_transcript.py")
 
     print(f"\nTranscribing {len(todo)} file(s) with engine={args.engine} "
@@ -150,6 +161,44 @@ def cmd_transcribe(args):
         else:
             failed.append((m.name, f"exit {rc}"))
             print(f"  ERROR: transcription subprocess failed (exit {rc})", file=sys.stderr)
+
+    print(f"\nDone: {ok} ok, {len(failed)} failed.")
+    for name, err in failed:
+        print(f"  FAILED {name}: {err}", file=sys.stderr)
+    return 0 if not failed else 2
+
+
+def _transcribe_in_process(todo, args):
+    """Transcribe all files in this process so the model/kernels stay warm.
+
+    The CrisperWhisper pipeline is cached per-process in auto_transcript, so only
+    the first file pays the load + GPU-warmup cost. Per-file exceptions (incl. the
+    deterministic CrisperWhisper crash) are caught so one bad file doesn't sink the
+    rest; a hard crash, however, ends the whole run (use the default subprocess
+    mode if you need that isolation).
+    """
+    from auto_transcript import transcribe
+
+    print(f"\nTranscribing {len(todo)} file(s) with engine={args.engine} "
+          f"(in-process, model stays warm)...\n")
+    ok, failed = 0, []
+    for i, m in enumerate(todo, 1):
+        print(f"[{i}/{len(todo)}] {m.name}", flush=True)
+        try:
+            transcribe(str(m), engine=args.engine, language=args.language,
+                       model=args.model, output_dir=str(m.parent))
+        except Exception as e:
+            failed.append((m.name, str(e)))
+            print(f"  ERROR: transcription failed: {e}", file=sys.stderr)
+            if args.verbose:
+                import traceback
+                traceback.print_exc()
+            continue
+        if file_state(m)["transcribed"]:
+            ok += 1
+        else:
+            failed.append((m.name, "no output produced"))
+            print(f"  ERROR: no transcript written for {m.name}", file=sys.stderr)
 
     print(f"\nDone: {ok} ok, {len(failed)} failed.")
     for name, err in failed:
@@ -295,6 +344,9 @@ def build_parser():
     pt.add_argument("--model", default="medium",
                     help="WhisperX model size (ignored for CrisperWhisper)")
     pt.add_argument("--language", default="en", help="Language code")
+    pt.add_argument("--in-process", action="store_true",
+                    help="Transcribe all files in one process (model stays warm; "
+                         "faster on RAM-ample machines). Default: subprocess per file.")
     pt.set_defaults(func=cmd_transcribe)
 
     px = sub.add_parser("export", parents=[common], help="Export edited SRTs")
