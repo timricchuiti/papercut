@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Transcription wrapper — generates .json and .srt from a video file.
 
-Supports two engines:
-  - whisperx (default): Uses WhisperX CLI for transcription.
-  - crisperwhisper: Uses CrisperWhisper (HuggingFace) for verbatim transcription
-    that preserves filler words, stutters, and false starts.
+Dispatches to one of three engines (see transcribe()):
+  - mlx (default): CrisperWhisper's weights via Apple MLX (mlx_transcribe.py),
+    verbatim and ~15-30x faster.
+  - crisperwhisper: CrisperWhisper (HuggingFace transformers), verbatim.
+  - whisperx: the WhisperX CLI.
 """
 
 import argparse
@@ -40,8 +41,49 @@ def transcribe(video_path, model="medium", language="en", output_dir=None,
                                   output_dir=output_dir,
                                   progress_callback=progress_callback,
                                   device=device)
+    return _transcribe_whisperx(video_path, model=model, language=language,
+                                output_dir=output_dir)
 
-    # WhisperX
+
+def _make_progress(progress_callback):
+    """Return a progress(msg) that prints and forwards to an optional callback."""
+    def _progress(msg):
+        print(msg)
+        if progress_callback:
+            progress_callback(msg)
+    return _progress
+
+
+def _write_transcript_outputs(segments, out_dir, stem, progress=print):
+    """Write {stem}.json / .srt / .srt.orig from WhisperX-style segments.
+
+    Shared by the CrisperWhisper and MLX engines so their on-disk output is
+    identical. Returns (json_path, srt_path, orig_srt_path).
+    """
+    out_dir = Path(out_dir)
+    json_path = out_dir / f"{stem}.json"
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump({"segments": segments}, f, indent=2, ensure_ascii=False)
+
+    srt_text = "".join(
+        f"{i}\n{_seconds_to_srt_time(seg['start'])} --> "
+        f"{_seconds_to_srt_time(seg['end'])}\n{seg['text']}\n\n"
+        for i, seg in enumerate(segments, 1)
+    )
+    srt_path = out_dir / f"{stem}.srt"
+    srt_path.write_text(srt_text, encoding="utf-8")
+    orig_srt_path = out_dir / f"{stem}.srt.orig"          # original, for diffing
+    orig_srt_path.write_text(srt_text, encoding="utf-8")
+
+    progress("Generated files:")
+    progress(f"  JSON (timestamps): {json_path}")
+    progress(f"  SRT (editable):    {srt_path}")
+    progress(f"  SRT (original):    {orig_srt_path}")
+    return json_path, srt_path, orig_srt_path
+
+
+def _transcribe_whisperx(video_path, model="medium", language="en", output_dir=None):
+    """Transcribe via the WhisperX CLI -> .json / .srt / .srt.orig."""
     video = Path(video_path).resolve()
     if not video.exists():
         print(f"Error: Video file not found: {video}", file=sys.stderr)
@@ -49,7 +91,6 @@ def transcribe(video_path, model="medium", language="en", output_dir=None,
 
     out_dir = Path(output_dir).resolve() if output_dir else video.parent
     out_dir.mkdir(parents=True, exist_ok=True)
-
     stem = video.stem
 
     cmd = [
@@ -115,11 +156,7 @@ def _transcribe_mlx(video_path, language="en", output_dir=None, progress_callbac
     video = Path(video_path).resolve()
     out_dir = Path(output_dir).resolve() if output_dir else video.parent
 
-    def _progress(msg):
-        print(msg)
-        if progress_callback:
-            progress_callback(msg)
-
+    _progress = _make_progress(progress_callback)
     _progress(f"Transcribing {video.name} via MLX engine...")
     cmd = [str(mlx_py), str(script), str(video),
            "--language", language, "--output-dir", str(out_dir)]
@@ -304,11 +341,7 @@ def transcribe_crisper(video_path, language="en", output_dir=None,
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = video.stem
 
-    def _progress(msg):
-        print(msg)
-        if progress_callback:
-            progress_callback(msg)
-
+    _progress = _make_progress(progress_callback)
     _progress("Loading CrisperWhisper model (nyrahealth/CrisperWhisper)...")
     pipe, device = _get_crisper_pipe(device, progress=_progress)
 
@@ -345,30 +378,8 @@ def transcribe_crisper(video_path, language="en", output_dir=None,
 
     # Group words into segments by pause gaps (>1s) or every ~30 words
     segments = _group_words_into_segments(words)
-
-    whisperx_data = {"segments": segments}
-
-    # Write JSON
-    json_path = out_dir / f"{stem}.json"
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(whisperx_data, f, indent=2, ensure_ascii=False)
-
-    # Write SRT
-    srt_path = out_dir / f"{stem}.srt"
-    with open(srt_path, "w", encoding="utf-8") as f:
-        for i, seg in enumerate(segments, 1):
-            start_ts = _seconds_to_srt_time(seg["start"])
-            end_ts = _seconds_to_srt_time(seg["end"])
-            f.write(f"{i}\n{start_ts} --> {end_ts}\n{seg['text']}\n\n")
-
-    # Save original SRT for diffing
-    orig_srt_path = out_dir / f"{stem}.srt.orig"
-    shutil.copy2(srt_path, orig_srt_path)
-
-    _progress(f"Generated files:")
-    _progress(f"  JSON (timestamps): {json_path}")
-    _progress(f"  SRT (editable):    {srt_path}")
-    _progress(f"  SRT (original):    {orig_srt_path}")
+    json_path, srt_path, orig_srt_path = _write_transcript_outputs(
+        segments, out_dir, stem, progress=_progress)
     _progress(f"Transcription complete ({len(segments)} segments, {len(words)} words).")
 
     return json_path, srt_path, orig_srt_path
