@@ -125,53 +125,67 @@ MIN_CLIP_DURATION = 0.1
 
 def build_clip_list(ordered_blocks, silence_kept_ranges, margin=0.0,
                     min_clip_dur=MIN_CLIP_DURATION):
-    """Build final clip list from user's ordered blocks + silence-detected kept ranges.
+    """Build the final clip list from kept blocks + silence-detected loud ranges.
 
-    For each kept block (in user's order), find silence-detected kept ranges that
-    overlap with the block's time span, clip them to block boundaries, and apply margin.
+    Each kept block is intersected with the loud ranges to get raw kept spans.
+    Spans that are CONTIGUOUS in the source — adjacent kept blocks with no cut
+    between them — are merged into one span first. Only then is `margin` added to
+    each span's edges, clamped to half the gap to the neighbouring span so clips
+    never overlap.
+
+    This matters: padding every block by ±margin and concatenating (the old
+    behaviour) made two adjacent kept blocks each claim the ~2*margin of source
+    audio straddling their shared boundary, so that slice played twice and sounded
+    like a stutter. Merging contiguous spans first means a continuous run of speech
+    is one clip with no internal boundary, while real cuts keep their breathing room.
 
     Args:
-        ordered_blocks: List of dicts with 'start' and 'end' (seconds), in user's desired order.
-        silence_kept_ranges: List of (start_sec, end_sec) from silence detection.
-        margin: Extra padding in seconds to add around each clip boundary.
-        min_clip_dur: Drop clips shorter than this many seconds (sliver filter).
+        ordered_blocks: dicts with 'start'/'end' (seconds), in playback order.
+        silence_kept_ranges: (start, end) loud ranges from silence detection.
+        margin: padding in seconds added around each clip, into the gaps/cuts.
+        min_clip_dur: drop clips shorter than this many seconds (sliver filter).
 
     Returns:
         List of Clip objects in playback order.
     """
-    clips = []
-
+    # 1. Raw kept spans = block ∩ loud ranges, with NO margin yet (playback order).
+    raw = []
     for block in ordered_blocks:
-        block_start = block["start"]
-        block_end = block["end"]
-
-        # Find silence-kept ranges overlapping this block
-        # The kept_ranges already have margin applied (from apply_margin in silence.py),
-        # so we just need to find which ones overlap with this block's time span.
-        # We allow kept ranges to extend slightly beyond block boundaries — the margin
-        # is meant to include a bit of silence before/after speech.
-        block_clips = []
+        bs, be = block["start"], block["end"]
+        hits = []
         for rng_start, rng_end in silence_kept_ranges:
-            # Check if this kept range overlaps the block (with margin tolerance)
-            overlap_start = max(rng_start, block_start - margin)
-            overlap_end = min(rng_end, block_end + margin)
-            if overlap_start < overlap_end:
-                block_clips.append(Clip(source_in=overlap_start, source_out=overlap_end))
+            o_s, o_e = max(rng_start, bs), min(rng_end, be)
+            if o_s < o_e:
+                hits.append((o_s, o_e))
+        raw.extend(hits if hits else [(bs, be)])  # no loud overlap -> keep whole block
 
-        if block_clips:
-            # Merge overlapping clips within this block
-            merged = [block_clips[0]]
-            for c in block_clips[1:]:
-                if c.source_in <= merged[-1].source_out:
-                    merged[-1] = Clip(merged[-1].source_in, max(merged[-1].source_out, c.source_out))
-                else:
-                    merged.append(c)
-            clips.extend(merged)
+    # 2. Merge spans that touch/overlap in source order. This collapses the
+    #    boundary between adjacent kept blocks (which would otherwise stutter);
+    #    a real cut leaves a gap here, so those spans stay separate. A reorder puts
+    #    a source-earlier span next (s < prev start) and is left separate too.
+    EPS = 1e-6
+    spans = []
+    for s, e in raw:
+        if spans and spans[-1][0] <= s <= spans[-1][1] + EPS:
+            spans[-1] = (spans[-1][0], max(spans[-1][1], e))
         else:
-            # No silence data overlaps — keep entire block
-            clips.append(Clip(source_in=block_start, source_out=block_end))
+            spans.append((s, e))
 
-    # Drop sub-threshold slivers (transients clipped at block boundaries).
+    # 3. Pad each span by margin, clamped to half the gap to each neighbour so
+    #    consecutive clips never overlap. Outer edges get the full margin.
+    clips = []
+    for i, (s, e) in enumerate(spans):
+        left_gap = (s - spans[i - 1][1]) if i > 0 else float("inf")
+        right_gap = (spans[i + 1][0] - e) if i + 1 < len(spans) else float("inf")
+        if left_gap < 0:        # reorder: neighbour is source-earlier, not adjacent
+            left_gap = float("inf")
+        if right_gap < 0:
+            right_gap = float("inf")
+        s2 = s - min(margin, left_gap / 2)
+        e2 = e + min(margin, right_gap / 2)
+        clips.append(Clip(source_in=s2, source_out=e2))
+
+    # 4. Drop sub-threshold slivers (transients clipped at block boundaries).
     if min_clip_dur > 0:
         clips = [c for c in clips if c.duration >= min_clip_dur]
 
@@ -257,8 +271,13 @@ def generate_fcpxml(media_path, clips, media_info):
     spine_items = []
     timeline_frames = 0
     for clip in clips:
+        # Round the in- AND out-points to frames, then take the frame difference for
+        # duration (rather than rounding the duration independently). Two clips that
+        # meet at the same source time then round to the same boundary frame, so no
+        # sub-frame source overlap survives at the seam.
         in_frame = round(clip.source_in * fps)
-        dur_frames = round(clip.duration * fps)
+        out_frame = round(clip.source_out * fps)
+        dur_frames = out_frame - in_frame
         if dur_frames <= 0:
             continue  # degenerate clip — skip rather than emit a 0-length item
         offset = _frames_to_rational(timeline_frames)
