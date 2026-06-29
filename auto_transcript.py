@@ -110,44 +110,21 @@ def _pick_device(prefer="auto"):
     return "cpu"
 
 
-def transcribe_crisper(video_path, language="en", output_dir=None,
-                       progress_callback=None, device="auto", chunk_length_s=30):
-    """Run CrisperWhisper on a video file for verbatim transcription.
+_CRISPER_MODEL_ID = "nyrahealth/CrisperWhisper"
 
-    CrisperWhisper preserves filler words (um, uh), stutters, false starts,
-    and repetitions that standard Whisper models typically drop.
+# Per-process cache of the built ASR pipeline, keyed by (device, dtype). An
+# in-process batch (batch.py --in-process) reuses the loaded weights AND the
+# warm MPS kernels across files, skipping the cold-start tax every file would
+# otherwise pay. A subprocess-per-file run never hits this (fresh process each).
+_CRISPER_PIPE_CACHE = {}
 
-    Args:
-        video_path: Path to the input video file.
-        language: Language code (default: en).
-        output_dir: Directory for output files (default: same as video).
-        progress_callback: Optional callable(message) for progress updates.
-        device: 'auto' (default; uses Apple-Silicon GPU/mps when available),
-            or an explicit torch device string like 'cpu', 'mps', 'cuda'.
 
-    Returns:
-        Tuple of (json_path, srt_path, orig_srt_path).
+def _get_crisper_pipe(device="auto", progress=print):
+    """Build (and per-process cache) the CrisperWhisper ASR pipeline.
+
+    Returns (pipe, resolved_device). The first call loads the model and compiles
+    GPU kernels; later calls in the same process reuse both.
     """
-    # Let unsupported ops fall back to CPU instead of erroring on MPS.
-    import os as _os
-    _os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
-    video = Path(video_path).resolve()
-    if not video.exists():
-        msg = f"Error: Video file not found: {video}"
-        print(msg, file=sys.stderr)
-        sys.exit(1)
-
-    out_dir = Path(output_dir).resolve() if output_dir else video.parent
-    out_dir.mkdir(parents=True, exist_ok=True)
-    stem = video.stem
-
-    def _progress(msg):
-        print(msg)
-        if progress_callback:
-            progress_callback(msg)
-
-    _progress("Loading CrisperWhisper model (nyrahealth/CrisperWhisper)...")
-
     try:
         import torch
         from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
@@ -156,7 +133,7 @@ def transcribe_crisper(video_path, language="en", output_dir=None,
         # may not match newer tokenizers/huggingface-hub versions. If the error is
         # just a version-range complaint, bypass the check and retry.
         if "is required for a normal functioning" in str(e):
-            _progress("Bypassing transformers version check (compatible fork detected)...")
+            progress("Bypassing transformers version check (compatible fork detected)...")
             import importlib.util as _ilu, sys as _sys
             _spec = _ilu.find_spec("transformers.utils.versions")
             _vmod = _ilu.module_from_spec(_spec)
@@ -171,20 +148,24 @@ def transcribe_crisper(video_path, language="en", output_dir=None,
                 "git+https://github.com/nyrahealth/transformers.git@crisper_whisper"
             )
 
-    model_id = "nyrahealth/CrisperWhisper"
     device = _pick_device(device)
     torch_dtype = torch.float32  # float16 is unreliable for timestamps on mps
-    _progress(f"Using device: {device}")
+    cache_key = (device, str(torch_dtype))
+    cached = _CRISPER_PIPE_CACHE.get(cache_key)
+    if cached is not None:
+        progress(f"Reusing loaded CrisperWhisper model (device: {device}, warm).")
+        return cached, device
 
-    _progress("Downloading/loading model weights (this may take a while on first run)...")
+    progress(f"Using device: {device}")
+    progress("Downloading/loading model weights (this may take a while on first run)...")
     model = AutoModelForSpeechSeq2Seq.from_pretrained(
-        model_id, torch_dtype=torch_dtype,
+        _CRISPER_MODEL_ID, torch_dtype=torch_dtype,
         use_safetensors=True,
     )
     model.to(device)
-    processor = AutoProcessor.from_pretrained(model_id)
+    processor = AutoProcessor.from_pretrained(_CRISPER_MODEL_ID)
 
-    _progress("Setting up transcription pipeline...")
+    progress("Setting up transcription pipeline...")
     pipe = pipeline(
         "automatic-speech-recognition",
         model=model,
@@ -246,6 +227,49 @@ def transcribe_crisper(video_path, language="en", output_dir=None,
             _gw.WhisperGenerationMixin._postprocess_outputs = _patched_postprocess
     except Exception:
         pass  # If patching fails, proceed anyway — may work without it
+
+    _CRISPER_PIPE_CACHE[cache_key] = pipe
+    return pipe, device
+
+
+def transcribe_crisper(video_path, language="en", output_dir=None,
+                       progress_callback=None, device="auto", chunk_length_s=30):
+    """Run CrisperWhisper on a video file for verbatim transcription.
+
+    CrisperWhisper preserves filler words (um, uh), stutters, false starts,
+    and repetitions that standard Whisper models typically drop.
+
+    Args:
+        video_path: Path to the input video file.
+        language: Language code (default: en).
+        output_dir: Directory for output files (default: same as video).
+        progress_callback: Optional callable(message) for progress updates.
+        device: 'auto' (default; uses Apple-Silicon GPU/mps when available),
+            or an explicit torch device string like 'cpu', 'mps', 'cuda'.
+
+    Returns:
+        Tuple of (json_path, srt_path, orig_srt_path).
+    """
+    # Let unsupported ops fall back to CPU instead of erroring on MPS.
+    import os as _os
+    _os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+    video = Path(video_path).resolve()
+    if not video.exists():
+        msg = f"Error: Video file not found: {video}"
+        print(msg, file=sys.stderr)
+        sys.exit(1)
+
+    out_dir = Path(output_dir).resolve() if output_dir else video.parent
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stem = video.stem
+
+    def _progress(msg):
+        print(msg)
+        if progress_callback:
+            progress_callback(msg)
+
+    _progress("Loading CrisperWhisper model (nyrahealth/CrisperWhisper)...")
+    pipe, device = _get_crisper_pipe(device, progress=_progress)
 
     _progress(f"Transcribing {video.name} (verbatim mode)...")
     result = pipe(
