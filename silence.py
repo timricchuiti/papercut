@@ -53,26 +53,56 @@ def detect_silence(media_path, threshold=0.04, frame_rate=30, sample_rate=48000)
     return max_amp >= threshold
 
 
+def _dilate(is_loud, k):
+    """Expand True (loud) regions by k frames on each side, in place."""
+    src = is_loud.copy()
+    for s in range(1, k + 1):
+        is_loud[s:] |= src[:-s]
+        is_loud[:-s] |= src[s:]
+
+
+def _erode(is_loud, k):
+    """Shrink True (loud) regions by k frames on each side, in place."""
+    src = is_loud.copy()
+    for s in range(1, k + 1):
+        is_loud[s:] &= src[:-s]
+        is_loud[:-s] &= src[s:]
+
+
+def bridge_gaps(is_loud, frames):
+    """Fill silent gaps up to ~2*frames long (a morphological close), in place.
+
+    Merges the micro-pauses inside continuous speech so a run of talking stays one
+    clip instead of fragmenting into dozens; longer gaps (real pauses) are left for
+    cutting. Unlike a plain dilation it restores the outer edges of each speech run,
+    so it adds NO dead air at clip heads/tails — that's the whole point of doing it
+    separately from the margin.
+    """
+    k = int(frames)
+    if k <= 0 or len(is_loud) == 0:
+        return
+    _dilate(is_loud, k)
+    _erode(is_loud, k)
+
+
 def apply_margin(is_loud, margin_frames):
-    """Expand loud regions by margin_frames in each direction (in-place).
+    """Pad (>0) or erode (<0) loud-region edges by |margin_frames|, in place.
+
+    Positive pads each loud region outward — auto-editor's positive margin, more
+    breath. Negative shrinks it, biting into the speech edges for tighter cuts —
+    auto-editor's negative margin. Zero is a no-op.
 
     Args:
         is_loud: Boolean numpy array (modified in place).
-        margin_frames: Number of frames to expand on each side.
+        margin_frames: Frames to expand (>0) or shrink (<0) on each side.
     """
-    if margin_frames <= 0 or len(is_loud) == 0:
+    k = abs(int(margin_frames))
+    if k == 0 or len(is_loud) == 0:
         return
-
-    n = len(is_loud)
-    # Find transitions: False→True (start of loud) and True→False (end of loud)
-    # Expand each loud region by margin_frames on both sides
-    result = is_loud.copy()
-    for i in range(n):
-        if is_loud[i]:
-            lo = max(0, i - margin_frames)
-            hi = min(n, i + margin_frames + 1)
-            result[lo:hi] = True
-    is_loud[:] = result
+    if margin_frames > 0:
+        _dilate(is_loud, k)
+    else:
+        _erode(is_loud, k)
 
 
 def get_kept_ranges(is_loud, frame_rate):

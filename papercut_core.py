@@ -18,7 +18,7 @@ import re
 from pathlib import Path
 
 from transcript_diff import parse_srt, load_whisper_json
-from silence import detect_silence, apply_margin, get_kept_ranges
+from silence import detect_silence, apply_margin, bridge_gaps, get_kept_ranges
 from timeline_export import (
     build_clip_list, get_media_info,
     generate_fcpxml, generate_premiere_xml, export_video, validate_fcpxml,
@@ -33,6 +33,12 @@ EXT_MAP = {
 }
 
 DEFAULT_THRESHOLD = 0.04
+
+# Silent gaps shorter than this (seconds) are bridged, not cut — they're the natural
+# micro-pauses inside speech. Cutting them would fragment a sentence into dozens of
+# clips and sound choppy. Longer gaps are real pauses and get cut. Decoupled from
+# `margin` (which only controls how tight the kept edges are), mirroring auto-editor.
+SILENCE_BRIDGE_S = 0.20
 
 
 def normalize_word(w):
@@ -87,13 +93,17 @@ def tokenize_with_cuts(text):
     return tokens
 
 
-def _merge_times_to_ranges(kept_word_times, margin):
-    """Merge consecutive kept (start, end) word spans into contiguous ranges."""
+def _merge_times_to_ranges(kept_word_times, max_gap):
+    """Merge consecutive kept (start, end) word spans into contiguous ranges.
+
+    Words separated by a gap <= max_gap seconds become one range (so a kept run of
+    speech isn't split into per-word ranges); a larger gap starts a new range.
+    """
     if not kept_word_times:
         return []
     ranges = [list(kept_word_times[0])]
     for start, end in kept_word_times[1:]:
-        if start - ranges[-1][1] <= margin * 2:
+        if start - ranges[-1][1] <= max_gap:
             ranges[-1][1] = end
         else:
             ranges.append([start, end])
@@ -123,7 +133,7 @@ def _match_rightmost(edited_words, block_words):
     return [(block_words[i]["start"], block_words[i]["end"]) for i in kept_idx]
 
 
-def resolve_word_edits(ordered_blocks, whisper_data, margin, warnings=None):
+def resolve_word_edits(ordered_blocks, whisper_data, max_gap, warnings=None):
     """For edited blocks, use word-level timestamps to create sub-block ranges.
 
     Three cases per block:
@@ -141,7 +151,7 @@ def resolve_word_edits(ordered_blocks, whisper_data, margin, warnings=None):
     Args:
         ordered_blocks: dicts with 'start', 'end', 'text', optional 'originalText'.
         whisper_data: WhisperX/CrisperWhisper JSON (word-level timestamps).
-        margin: Seconds; kept words closer than 2*margin merge into one range.
+        max_gap: Seconds; kept words closer than this merge into one range.
 
     Returns:
         List of {"start", "end"} dicts in playback order.
@@ -215,14 +225,20 @@ def resolve_word_edits(ordered_blocks, whisper_data, margin, warnings=None):
             resolved.append({"start": block["start"], "end": block["end"]})
             continue
 
-        resolved.extend(_merge_times_to_ranges(kept_word_times, margin))
+        resolved.extend(_merge_times_to_ranges(kept_word_times, max_gap))
 
     return resolved
 
 
-def build_clips(video, ordered_blocks, whisper_data, margin=0.1,
+def build_clips(video, ordered_blocks, whisper_data, margin=0.0,
                 threshold=DEFAULT_THRESHOLD, media_info=None, warnings=None):
     """Resolve edits + silence-detect + build the final clip list.
+
+    `margin` (seconds) controls only how tight the kept edges are: > 0 pads each clip
+    with a little silence (breath), < 0 (auto-editor's -0.1) bites into the speech for
+    tighter cuts, 0 sits right at the speech. Defragmentation — keeping natural
+    micro-pauses so speech doesn't shatter into dozens of clips — is handled
+    separately by SILENCE_BRIDGE_S, not by margin.
 
     Returns (clips, media_info). Raises ValueError if no clips result.
     `warnings`: optional list for marker-placement failures (see resolve_word_edits).
@@ -232,15 +248,18 @@ def build_clips(video, ordered_blocks, whisper_data, margin=0.1,
         media_info = get_media_info(str(video))
     frame_rate = media_info["frame_rate"]
 
-    resolved_blocks = resolve_word_edits(ordered_blocks, whisper_data, margin,
+    resolved_blocks = resolve_word_edits(ordered_blocks, whisper_data, SILENCE_BRIDGE_S,
                                          warnings=warnings)
 
     is_loud = detect_silence(str(video), threshold=threshold, frame_rate=frame_rate,
                              sample_rate=media_info["sample_rate"])
-    apply_margin(is_loud, int(margin * frame_rate))
+    # 1. Bridge micro-pauses so a run of speech stays one clip (no fragmenting).
+    bridge_gaps(is_loud, round(SILENCE_BRIDGE_S * frame_rate))
+    # 2. Margin: pad (>0) or erode (<0) the kept edges — the only role margin plays.
+    apply_margin(is_loud, round(margin * frame_rate))
     kept_ranges = get_kept_ranges(is_loud, frame_rate)
 
-    clips = build_clip_list(resolved_blocks, kept_ranges, margin=margin)
+    clips = build_clip_list(resolved_blocks, kept_ranges)
     if not clips:
         raise ValueError("No audio detected in kept blocks — nothing to export.")
     return clips, media_info
@@ -278,7 +297,7 @@ def resolve_output_path(video, export_format, export_folder=None, suffix="_ALTER
 
 
 def export_from_blocks(video, ordered_blocks, whisper_data=None,
-                       export_format="final-cut-pro", margin=0.1,
+                       export_format="final-cut-pro", margin=0.0,
                        threshold=DEFAULT_THRESHOLD, edit_method="",
                        ffmpeg_args=None, output_path=None, export_folder=None):
     """High-level export from a list of ordered blocks (the GUI's data shape).
@@ -383,7 +402,7 @@ def srt_to_ordered_blocks(edited_srt, orig_srt=None):
 
 
 def export_from_srt(video, edited_srt, whisper_json=None, orig_srt=None,
-                    export_format="final-cut-pro", margin=0.1,
+                    export_format="final-cut-pro", margin=0.0,
                     threshold=DEFAULT_THRESHOLD, ffmpeg_args=None,
                     output_path=None, export_folder=None):
     """Headless export: edited SRT (+ original + JSON) -> output file.

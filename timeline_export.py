@@ -123,69 +123,64 @@ def _fcp_colorspace(stream):
 MIN_CLIP_DURATION = 0.1
 
 
-def build_clip_list(ordered_blocks, silence_kept_ranges, margin=0.0,
+def build_clip_list(ordered_blocks, silence_kept_ranges,
                     min_clip_dur=MIN_CLIP_DURATION):
     """Build the final clip list from kept blocks + silence-detected loud ranges.
 
-    Each kept block is intersected with the loud ranges to get raw kept spans.
-    Spans that are CONTIGUOUS in the source — adjacent kept blocks with no cut
-    between them — are merged into one span first. Only then is `margin` added to
-    each span's edges, clamped to half the gap to the neighbouring span so clips
-    never overlap.
+    Each kept block is intersected with the loud ranges (which silence.apply_margin
+    has already padded — or eroded — by the user's margin, auto-editor style, ONCE).
+    This function adds NO margin of its own. Clips therefore land tight against the
+    actual speech: a clip starts at the later of its block's first-word time and the
+    loud onset, and ends at the earlier of its last-word time and the loud offset.
+    Silence inside a block (a gap between two loud ranges) splits it into separate
+    clips, cutting the pause.
 
-    This matters: padding every block by ±margin and concatenating (the old
-    behaviour) made two adjacent kept blocks each claim the ~2*margin of source
-    audio straddling their shared boundary, so that slice played twice and sounded
-    like a stutter. Merging contiguous spans first means a continuous run of speech
-    is one clip with no internal boundary, while real cuts keep their breathing room.
+    Adding ±margin here (the old behaviour) double-padded every clip — dead air at
+    the head and tail of each one — and made adjacent kept blocks overlap by 2*margin
+    at their shared boundary (a replayed slice that sounded like a stutter). Both are
+    gone now: with no per-block margin, contiguous blocks simply abut.
 
     Args:
         ordered_blocks: dicts with 'start'/'end' (seconds), in playback order.
         silence_kept_ranges: (start, end) loud ranges from silence detection.
-        margin: padding in seconds added around each clip, into the gaps/cuts.
         min_clip_dur: drop clips shorter than this many seconds (sliver filter).
 
     Returns:
         List of Clip objects in playback order.
     """
-    # 1. Raw kept spans = block ∩ loud ranges, with NO margin yet (playback order).
-    raw = []
+    spans = []
     for block in ordered_blocks:
         bs, be = block["start"], block["end"]
-        hits = []
+        block_clips = []
         for rng_start, rng_end in silence_kept_ranges:
-            o_s, o_e = max(rng_start, bs), min(rng_end, be)
+            o_s = max(rng_start, bs)            # tight: no ±margin extension
+            o_e = min(rng_end, be)
             if o_s < o_e:
-                hits.append((o_s, o_e))
-        raw.extend(hits if hits else [(bs, be)])  # no loud overlap -> keep whole block
-
-    # 2. Merge spans that touch/overlap in source order. This collapses the
-    #    boundary between adjacent kept blocks (which would otherwise stutter);
-    #    a real cut leaves a gap here, so those spans stay separate. A reorder puts
-    #    a source-earlier span next (s < prev start) and is left separate too.
-    EPS = 1e-6
-    spans = []
-    for s, e in raw:
-        if spans and spans[-1][0] <= s <= spans[-1][1] + EPS:
-            spans[-1] = (spans[-1][0], max(spans[-1][1], e))
+                block_clips.append([o_s, o_e])
+        if block_clips:
+            block_clips.sort()
+            merged = [block_clips[0]]
+            for c in block_clips[1:]:
+                if c[0] <= merged[-1][1]:
+                    merged[-1][1] = max(merged[-1][1], c[1])
+                else:
+                    merged.append(c)
+            spans.extend(merged)
         else:
-            spans.append((s, e))
+            spans.append([bs, be])              # no loud overlap -> keep whole block
 
-    # 3. Pad each span by margin, clamped to half the gap to each neighbour so
-    #    consecutive clips never overlap. Outer edges get the full margin.
-    clips = []
-    for i, (s, e) in enumerate(spans):
-        left_gap = (s - spans[i - 1][1]) if i > 0 else float("inf")
-        right_gap = (spans[i + 1][0] - e) if i + 1 < len(spans) else float("inf")
-        if left_gap < 0:        # reorder: neighbour is source-earlier, not adjacent
-            left_gap = float("inf")
-        if right_gap < 0:
-            right_gap = float("inf")
-        s2 = s - min(margin, left_gap / 2)
-        e2 = e + min(margin, right_gap / 2)
-        clips.append(Clip(source_in=s2, source_out=e2))
+    # Safety: clamp any residual source overlap between consecutive in-order clips
+    # (e.g. from loud ranges that bridge a block boundary) so nothing replays. A
+    # reorder (next clip starts earlier in source) is left alone.
+    for i in range(len(spans) - 1):
+        if spans[i][0] <= spans[i + 1][0] < spans[i][1]:
+            mid = (spans[i][1] + spans[i + 1][0]) / 2
+            spans[i][1] = mid
+            spans[i + 1][0] = mid
 
-    # 4. Drop sub-threshold slivers (transients clipped at block boundaries).
+    clips = [Clip(source_in=s, source_out=e) for s, e in spans]
+
+    # Drop sub-threshold slivers (transients clipped at block boundaries).
     if min_clip_dur > 0:
         clips = [c for c in clips if c.duration >= min_clip_dur]
 
