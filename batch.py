@@ -349,8 +349,9 @@ def build_parser():
     px.add_argument("--format", default="final-cut-pro",
                     choices=["final-cut-pro", "resolve", "premiere", "video"],
                     help="Export format (default: final-cut-pro)")
-    px.add_argument("--margin", type=float, default=0.1,
-                    help="Boundary padding in seconds (default: 0.1)")
+    px.add_argument("--margin", type=float, default=0.0,
+                    help="Edge tightness in seconds: 0 sits at the speech "
+                         "(default), >0 adds breath, <0 (e.g. -0.1) cuts tighter")
     px.add_argument("--threshold", type=float, default=0.04,
                     help="Silence amplitude threshold (default: 0.04)")
     px.set_defaults(func=cmd_export)

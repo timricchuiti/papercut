@@ -305,7 +305,7 @@ def export_video():
     video_path = data.get("video_path", "")
     json_path = data.get("json_path", "")
     ordered_blocks = data.get("ordered_blocks", [])  # [{id, start, end, text, originalText}, ...]
-    margin = data.get("margin", 0.1)
+    margin = data.get("margin", 0.0)
     export_format = data.get("export", "final-cut-pro")
     ffmpeg_args = data.get("ffmpeg_args", "")
     edit_method = data.get("edit_method", "")

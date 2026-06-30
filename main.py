@@ -58,8 +58,9 @@ def main():
     parser.add_argument("--export", default=None,
                         choices=["final-cut-pro", "resolve", "premiere", "video"],
                         help="Export format")
-    parser.add_argument("--margin", type=float, default=0.1,
-                        help="Boundary padding in seconds (default: 0.1)")
+    parser.add_argument("--margin", type=float, default=0.0,
+                        help="Edge tightness in seconds: 0 sits at the speech "
+                             "(default), >0 adds breath, <0 (e.g. -0.1) cuts tighter")
     parser.add_argument("--threshold", type=float, default=0.04,
                         help="Silence amplitude threshold (default: 0.04)")
     parser.add_argument("--ffmpeg-args", default=None,
