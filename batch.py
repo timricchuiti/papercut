@@ -25,6 +25,8 @@ import sys
 import traceback
 from pathlib import Path
 
+from papercut_core import DEFAULT_MARGIN, SILENCE_BRIDGE_S
+
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".m4v", ".avi", ".webm"}
 AUDIO_EXTS = {".wav", ".mp3", ".m4a", ".aac", ".flac", ".aiff", ".aif", ".ogg"}
 MEDIA_EXTS = VIDEO_EXTS | AUDIO_EXTS
@@ -251,7 +253,7 @@ def cmd_export(args):
                 whisper_json=str(json_p) if json_p.exists() else None,
                 orig_srt=str(orig_p) if orig_p.exists() else None,
                 export_format=args.format, margin=args.margin,
-                threshold=args.threshold,
+                threshold=args.threshold, bridge=args.bridge,
             )
             src = result.get("source_duration") or 0.0
             kept = result.get("total_duration") or 0.0
@@ -349,9 +351,13 @@ def build_parser():
     px.add_argument("--format", default="final-cut-pro",
                     choices=["final-cut-pro", "resolve", "premiere", "video"],
                     help="Export format (default: final-cut-pro)")
-    px.add_argument("--margin", type=float, default=0.0,
-                    help="Edge tightness in seconds: 0 sits at the speech "
-                         "(default), >0 adds breath, <0 (e.g. -0.1) cuts tighter")
+    px.add_argument("--margin", type=float, default=DEFAULT_MARGIN,
+                    help="Edge tightness in seconds: 0 sits at the speech, "
+                         ">0 adds breath, <0 (e.g. -0.1) cuts tighter "
+                         f"(default: {DEFAULT_MARGIN})")
+    px.add_argument("--bridge", type=float, default=SILENCE_BRIDGE_S,
+                    help="Keep silent gaps up to ~2x this inside speech instead "
+                         f"of cutting them (default: {SILENCE_BRIDGE_S})")
     px.add_argument("--threshold", type=float, default=0.04,
                     help="Silence amplitude threshold (default: 0.04)")
     px.set_defaults(func=cmd_export)

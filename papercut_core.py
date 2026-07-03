@@ -34,11 +34,30 @@ EXT_MAP = {
 
 DEFAULT_THRESHOLD = 0.04
 
+# Default edge margin (seconds): a little breath around each clip. 0 sits right at
+# the detected speech; negative erodes into it. 0.07 is Tim's tuned preference
+# (0 = too tight, 0.10 doubled = the old dead-air bug).
+DEFAULT_MARGIN = 0.07
+
 # Silent gaps shorter than this (seconds) are bridged, not cut — they're the natural
 # micro-pauses inside speech. Cutting them would fragment a sentence into dozens of
 # clips and sound choppy. Longer gaps are real pauses and get cut. Decoupled from
 # `margin` (which only controls how tight the kept edges are), mirroring auto-editor.
 SILENCE_BRIDGE_S = 0.20
+
+# [[FLAG: note]] annotations in a block's text become FCPXML markers at that block's
+# start time (visible on the FCP timeline), and are stripped before word matching.
+FLAG_RE = re.compile(r"\[\[FLAG:?\s*(.*?)\s*\]\]", re.DOTALL)
+
+
+def extract_flags(text):
+    """Strip [[FLAG: note]] annotations from text; return (clean_text, [notes])."""
+    notes = [m.group(1) for m in FLAG_RE.finditer(text)]
+    if not notes:
+        return text, []
+    clean = FLAG_RE.sub(" ", text)
+    clean = re.sub(r"[ \t]{2,}", " ", clean).strip()
+    return clean, notes
 
 
 def normalize_word(w):
@@ -230,15 +249,16 @@ def resolve_word_edits(ordered_blocks, whisper_data, max_gap, warnings=None):
     return resolved
 
 
-def build_clips(video, ordered_blocks, whisper_data, margin=0.0,
-                threshold=DEFAULT_THRESHOLD, media_info=None, warnings=None):
+def build_clips(video, ordered_blocks, whisper_data, margin=DEFAULT_MARGIN,
+                threshold=DEFAULT_THRESHOLD, bridge=SILENCE_BRIDGE_S,
+                media_info=None, warnings=None):
     """Resolve edits + silence-detect + build the final clip list.
 
     `margin` (seconds) controls only how tight the kept edges are: > 0 pads each clip
     with a little silence (breath), < 0 (auto-editor's -0.1) bites into the speech for
-    tighter cuts, 0 sits right at the speech. Defragmentation — keeping natural
-    micro-pauses so speech doesn't shatter into dozens of clips — is handled
-    separately by SILENCE_BRIDGE_S, not by margin.
+    tighter cuts, 0 sits right at the speech. `bridge` (seconds) is the separate
+    defragmentation knob: silent gaps up to ~2*bridge inside speech are kept (natural
+    micro-pauses) instead of shattering a sentence into dozens of clips.
 
     Returns (clips, media_info). Raises ValueError if no clips result.
     `warnings`: optional list for marker-placement failures (see resolve_word_edits).
@@ -248,13 +268,13 @@ def build_clips(video, ordered_blocks, whisper_data, margin=0.0,
         media_info = get_media_info(str(video))
     frame_rate = media_info["frame_rate"]
 
-    resolved_blocks = resolve_word_edits(ordered_blocks, whisper_data, SILENCE_BRIDGE_S,
+    resolved_blocks = resolve_word_edits(ordered_blocks, whisper_data, bridge,
                                          warnings=warnings)
 
     is_loud = detect_silence(str(video), threshold=threshold, frame_rate=frame_rate,
                              sample_rate=media_info["sample_rate"])
     # 1. Bridge micro-pauses so a run of speech stays one clip (no fragmenting).
-    bridge_gaps(is_loud, round(SILENCE_BRIDGE_S * frame_rate))
+    bridge_gaps(is_loud, round(bridge * frame_rate))
     # 2. Margin: pad (>0) or erode (<0) the kept edges — the only role margin plays.
     apply_margin(is_loud, round(margin * frame_rate))
     kept_ranges = get_kept_ranges(is_loud, frame_rate)
@@ -266,14 +286,19 @@ def build_clips(video, ordered_blocks, whisper_data, margin=0.0,
 
 
 def write_export(video, clips, media_info, export_format, output_path,
-                 ffmpeg_args=None):
-    """Generate the chosen output format and write it to output_path."""
+                 ffmpeg_args=None, flags=None):
+    """Generate the chosen output format and write it to output_path.
+
+    `flags`: optional [{"time": sec, "note": str}] — embedded as timeline markers
+    in FCPXML formats (ignored for premiere/video).
+    """
     video = str(video)
     output_path = str(output_path)
 
     if export_format in ("final-cut-pro", "resolve"):
         Path(output_path).write_text(
-            generate_fcpxml(video, clips, media_info), encoding="utf-8")
+            generate_fcpxml(video, clips, media_info, flags=flags),
+            encoding="utf-8")
     elif export_format == "premiere":
         Path(output_path).write_text(
             generate_premiere_xml(video, clips, media_info), encoding="utf-8")
@@ -297,9 +322,10 @@ def resolve_output_path(video, export_format, export_folder=None, suffix="_ALTER
 
 
 def export_from_blocks(video, ordered_blocks, whisper_data=None,
-                       export_format="final-cut-pro", margin=0.0,
-                       threshold=DEFAULT_THRESHOLD, edit_method="",
-                       ffmpeg_args=None, output_path=None, export_folder=None):
+                       export_format="final-cut-pro", margin=DEFAULT_MARGIN,
+                       threshold=DEFAULT_THRESHOLD, bridge=SILENCE_BRIDGE_S,
+                       edit_method="", ffmpeg_args=None, output_path=None,
+                       export_folder=None):
     """High-level export from a list of ordered blocks (the GUI's data shape).
 
     Args:
@@ -307,8 +333,9 @@ def export_from_blocks(video, ordered_blocks, whisper_data=None,
         ordered_blocks: [{start, end, text, originalText}, ...] in playback order.
         whisper_data: Parsed WhisperX/CrisperWhisper JSON (or None).
         export_format: final-cut-pro | resolve | premiere | video.
-        margin: Boundary padding in seconds.
+        margin: Edge tightness in seconds (>0 breath, <0 tighter, 0 at the speech).
         threshold: Silence amplitude threshold (overridden by edit_method if set).
+        bridge: Keep silent gaps up to ~2*bridge seconds inside speech (defrag knob).
         edit_method: e.g. "audio:threshold=0.04" — parsed for threshold.
         ffmpeg_args: Extra args for the "video" format.
         output_path: Explicit output path (else derived).
@@ -326,17 +353,29 @@ def export_from_blocks(video, ordered_blocks, whisper_data=None,
     if edit_method:
         threshold = parse_threshold(edit_method, threshold)
 
+    # Pull [[FLAG: note]] annotations out of the block texts BEFORE word matching
+    # (they'd otherwise break token alignment). Each becomes an FCPXML marker at
+    # the block's start time.
+    flags = []
+    for block in ordered_blocks:
+        clean, notes = extract_flags(block.get("text", ""))
+        if notes:
+            block["text"] = clean
+            flags.extend({"time": block["start"], "note": n} for n in notes)
+        if block.get("originalText"):
+            block["originalText"] = extract_flags(block["originalText"])[0]
+
     # Collect [[CUT]]-placement warnings while resolving edits.
     warnings = []
     clips, media_info = build_clips(video, ordered_blocks, whisper_data,
                                     margin=margin, threshold=threshold,
-                                    warnings=warnings)
+                                    bridge=bridge, warnings=warnings)
 
     if output_path is None:
         output_path = resolve_output_path(video, export_format, export_folder)
 
     write_export(video, clips, media_info, export_format, output_path,
-                 ffmpeg_args=ffmpeg_args)
+                 ffmpeg_args=ffmpeg_args, flags=flags)
 
     # Guardrail: scan the written FCPXML for tiny clips / tiling errors.
     if export_format in ("final-cut-pro", "resolve"):
@@ -347,15 +386,17 @@ def export_from_blocks(video, ordered_blocks, whisper_data=None,
 
     total_dur = sum(c.duration for c in clips)
     source_dur = media_info.get("duration", 0.0)
+    marker_note = f", {len(flags)} flag marker(s)" if flags else ""
     return {
         "success": True,
         "output_path": str(output_path),
         "clip_count": len(clips),
         "total_duration": total_dur,
         "source_duration": source_dur,
+        "flag_count": len(flags),
         "warnings": warnings,
         "message": f"Export completed: {Path(output_path).name} "
-                   f"({len(clips)} clips, {total_dur:.1f}s)",
+                   f"({len(clips)} clips, {total_dur:.1f}s{marker_note})",
     }
 
 
@@ -402,9 +443,9 @@ def srt_to_ordered_blocks(edited_srt, orig_srt=None):
 
 
 def export_from_srt(video, edited_srt, whisper_json=None, orig_srt=None,
-                    export_format="final-cut-pro", margin=0.0,
-                    threshold=DEFAULT_THRESHOLD, ffmpeg_args=None,
-                    output_path=None, export_folder=None):
+                    export_format="final-cut-pro", margin=DEFAULT_MARGIN,
+                    threshold=DEFAULT_THRESHOLD, bridge=SILENCE_BRIDGE_S,
+                    ffmpeg_args=None, output_path=None, export_folder=None):
     """Headless export: edited SRT (+ original + JSON) -> output file.
 
     This is the CLI twin of the GUI export. Deleted SRT blocks are dropped;
@@ -436,6 +477,6 @@ def export_from_srt(video, edited_srt, whisper_json=None, orig_srt=None,
     return export_from_blocks(
         video, ordered_blocks, whisper_data=whisper_data,
         export_format=export_format, margin=margin, threshold=threshold,
-        ffmpeg_args=ffmpeg_args, output_path=output_path,
+        bridge=bridge, ffmpeg_args=ffmpeg_args, output_path=output_path,
         export_folder=export_folder,
     )

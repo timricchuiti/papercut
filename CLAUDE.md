@@ -80,6 +80,10 @@ python3 web_gui.py --port 5009
 - FCPXML imports into FCP as event "PaperCut Import" with project `{filename}_ALTERED`
 - Silence detection threshold parsed from `edit_method` field (e.g. `audio:threshold=0.04`)
 - Export pipeline: ordered_blocks from frontend → silence detection → clip list → output format
+- **Two cut knobs** (margin was double-applied + conflated with pause-bridging until 2026-06; don't regress):
+  - `--margin` (default **0.07**, Tim's preference) — edge tightness ONLY, applied once in `silence.apply_margin`. `>0` breath, `0` at the speech, `<0` erodes tighter. `build_clip_list` adds NO margin of its own.
+  - `--bridge` (default 0.20) — keep silent gaps up to ~2× this inside speech (morphological close) so sentences don't fragment; longer pauses get cut.
+- **`[[FLAG: note]]`** in an SRT block → FCPXML `<marker>` on the containing clip (stripped before word matching). See `EDITING_PROTOCOL.md`.
 
 ## Design Constraints
 

@@ -210,13 +210,16 @@ def _fcp_format_name(width, height, fr_num, fr_den):
     return "FFVideoFormatRateUndefined"
 
 
-def generate_fcpxml(media_path, clips, media_info):
+def generate_fcpxml(media_path, clips, media_info, flags=None):
     """Generate FCPXML 1.11 string for Final Cut Pro / DaVinci Resolve.
 
     Args:
         media_path: Path to the source media file.
         clips: List of Clip objects.
         media_info: Dict from get_media_info().
+        flags: Optional [{"time": source_sec, "note": str}] — each becomes a
+            <marker> on the clip containing (or nearest to) that source time,
+            visible on the FCP timeline for review.
 
     Returns:
         FCPXML string.
@@ -259,28 +262,60 @@ def generate_fcpxml(media_path, clips, media_info):
     has_audio_str = "1" if has_audio else "0"
     asset_el = f'    <asset id="r2" name="{xml_escape(p.stem)}" start="0s" hasVideo="{has_video_str}" format="r1" hasAudio="{has_audio_str}" audioSources="1" audioChannels="2" duration="{tl_dur_str}">\n{media_rep}\n    </asset>'
 
+    # Round each clip's in- AND out-points to frames, then take the frame
+    # difference for duration (rounding the duration independently produced
+    # sub-frame overlaps at seams). Degenerate (0-frame) clips are skipped.
+    emitted = []  # (in_frame, dur_frames) per emitted clip
+    for clip in clips:
+        in_frame = round(clip.source_in * fps)
+        out_frame = round(clip.source_out * fps)
+        dur_frames = out_frame - in_frame
+        if dur_frames > 0:
+            emitted.append((in_frame, dur_frames))
+
+    # Assign each [[FLAG]] to the emitted clip containing its source time —
+    # or the nearest clip, if the flagged moment itself was cut. Marker start
+    # is in the clip's SOURCE-time coordinates (same space as its start attr).
+    clip_markers = {}
+    for flag in flags or []:
+        f_frame = round(flag.get("time", 0) * fps)
+        best_i, best_dist = None, None
+        for i, (fi, fd) in enumerate(emitted):
+            if fi <= f_frame < fi + fd:
+                best_i = i
+                break
+            dist = (fi - f_frame) if f_frame < fi else (f_frame - (fi + fd - 1))
+            if best_dist is None or dist < best_dist:
+                best_i, best_dist = i, dist
+        if best_i is None:
+            continue  # no clips at all
+        fi, fd = emitted[best_i]
+        m_frame = min(max(f_frame, fi), fi + fd - 1)
+        note = xml_escape(str(flag.get("note", "")) or "FLAG", {'"': "&quot;"})
+        clip_markers.setdefault(best_i, []).append(
+            f'            <marker start="{_frames_to_rational(m_frame)}" '
+            f'duration="{_frames_to_rational(1)}" value="{note}"/>'
+        )
+
     # Build spine clips — accumulate the timeline position in INTEGER FRAMES so
     # every clip's offset equals the exact sum of prior durations. Rounding each
     # clip's offset and duration independently from floats (the old approach)
     # produced ±1-frame gaps/overlaps that FCP imports as spurious 1–2 frame clips.
     spine_items = []
     timeline_frames = 0
-    for clip in clips:
-        # Round the in- AND out-points to frames, then take the frame difference for
-        # duration (rather than rounding the duration independently). Two clips that
-        # meet at the same source time then round to the same boundary frame, so no
-        # sub-frame source overlap survives at the seam.
-        in_frame = round(clip.source_in * fps)
-        out_frame = round(clip.source_out * fps)
-        dur_frames = out_frame - in_frame
-        if dur_frames <= 0:
-            continue  # degenerate clip — skip rather than emit a 0-length item
+    for i, (in_frame, dur_frames) in enumerate(emitted):
         offset = _frames_to_rational(timeline_frames)
         start = _frames_to_rational(in_frame)
         dur = _frames_to_rational(dur_frames)
-        spine_items.append(
-            f'          <asset-clip name="{xml_escape(p.stem)}" ref="r2" offset="{offset}" duration="{dur}" start="{start}" tcFormat="NDF"/>'
-        )
+        attrs = (f'name="{xml_escape(p.stem)}" ref="r2" offset="{offset}" '
+                 f'duration="{dur}" start="{start}" tcFormat="NDF"')
+        markers = clip_markers.get(i)
+        if markers:
+            spine_items.append(f'          <asset-clip {attrs}>\n'
+                               + "\n".join(markers)
+                               + '\n          </asset-clip>')
+        else:
+            spine_items.append(f'          <asset-clip {attrs}/>')
         timeline_frames += dur_frames
 
     spine_xml = "\n".join(spine_items)
