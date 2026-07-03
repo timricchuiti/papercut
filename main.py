@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 
 from auto_transcript import transcribe
-from papercut_core import export_from_srt
+from papercut_core import export_from_srt, DEFAULT_MARGIN, SILENCE_BRIDGE_S
 
 
 def open_in_editor(filepath):
@@ -58,9 +58,13 @@ def main():
     parser.add_argument("--export", default=None,
                         choices=["final-cut-pro", "resolve", "premiere", "video"],
                         help="Export format")
-    parser.add_argument("--margin", type=float, default=0.0,
-                        help="Edge tightness in seconds: 0 sits at the speech "
-                             "(default), >0 adds breath, <0 (e.g. -0.1) cuts tighter")
+    parser.add_argument("--margin", type=float, default=DEFAULT_MARGIN,
+                        help="Edge tightness in seconds: 0 sits at the speech, "
+                             ">0 adds breath, <0 (e.g. -0.1) cuts tighter "
+                             f"(default: {DEFAULT_MARGIN})")
+    parser.add_argument("--bridge", type=float, default=SILENCE_BRIDGE_S,
+                        help="Keep silent gaps up to ~2x this inside speech instead "
+                             f"of cutting them (default: {SILENCE_BRIDGE_S})")
     parser.add_argument("--threshold", type=float, default=0.04,
                         help="Silence amplitude threshold (default: 0.04)")
     parser.add_argument("--ffmpeg-args", default=None,
@@ -116,7 +120,7 @@ def main():
         whisper_json=str(whisper_json) if whisper_json.exists() else None,
         orig_srt=str(orig_srt) if orig_srt.exists() else None,
         export_format=args.export, margin=args.margin, threshold=args.threshold,
-        ffmpeg_args=args.ffmpeg_args, output_path=args.output,
+        bridge=args.bridge, ffmpeg_args=args.ffmpeg_args, output_path=args.output,
     )
 
     src = result.get("source_duration") or 0.0

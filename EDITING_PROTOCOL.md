@@ -8,21 +8,26 @@ rather than re-deriving it each session.
 ## The loop
 
 ```
-batch.py transcribe <dir>     # verbatim transcripts (CrisperWhisper), one
-                              #   subprocess per file (memory reclaimed between)
+batch.py transcribe <dir>     # verbatim transcripts (MLX engine by default,
+                              #   ~15-30x faster than the transformers path)
   → Claude edits each <stem>.srt + writes <stem>.notes.md
 batch.py export <dir>         # OR per file: main.py … --export final-cut-pro
   → Claude reads the report + notes for sense
 ```
 
-Run everything under the CrisperWhisper venv: `.venv-crisper/bin/python …`.
-**Export margin: `--margin 0.12`** (Tim's current setting; was 0.1).
+Run everything under the CrisperWhisper venv: `.venv-crisper/bin/python …`
+(transcription shells out to `.venv-mlx` automatically for the default engine).
+
+**Export knobs** (defaults are baked in — normally pass nothing):
+- **margin** — edge tightness. Default **0.07** (Tim's tuned preference: a little
+  breath around each clip). `0` sits right at the speech; **negative = tighter**,
+  positive = looser. NOTE: the sign is the reverse of Tim's old auto-editor
+  instinct — his "-0.1 feel" maps to a small POSITIVE value here.
+- **bridge** — keep silent gaps up to ~2× this inside speech (default 0.20s) so
+  sentences don't fragment; longer pauses are cut.
+
 Output `<stem>_ALTERED.fcpxml` + `<stem>.notes.md` next to the source `.mp4`,
 referencing the original. Leave `<stem>.srt.orig` untouched (diff baseline).
-
-Memory note: a fresh machine (low swap) transcribes at warm rate (~1.7× realtime
-after the first file's GPU warmup). If swap is already high from prior runs,
-transcription thrashes — a reboot or `sudo purge` before a big batch fixes it.
 
 ## What Claude edits
 
@@ -112,13 +117,23 @@ re-take that called the 2nd component "the first"; keep the clean/correct one.)
   a needed word seems to fall in the gap (e.g. a stated answer that never appears
   in the audio), **flag it** — the on-screen visual may cover it, but confirm.
 
-## Flagging — write to `<stem>.notes.md`
+## Flagging — `[[FLAG]]` markers + `<stem>.notes.md`
 
-One per file. Sections: **Deletions** (what & why, with timestamps),
-**Within-block trims**, **⚠ Flags** (anything uncertain or any suspected
-content/math issue — flag-not-fix), and **Sense check** (does it read end to end;
-note the per-example math is intact). Lead with the flags when the file needs
-real review (meta-notes, broken keep-last, missing answer, etc.).
+**`[[FLAG: short note]]` in the SRT → an FCP timeline marker.** Drop one inside
+any block that needs Tim's eyes (content error kept per flag-not-fix, a stitch
+across a re-record, a suspected missing answer, a broken keep-last). On export it
+becomes a named marker on that clip in Final Cut, right where the issue is — so
+Tim doesn't have to hunt timestamps from the notes. The flag text is stripped
+before word matching (it never affects the cut), and works alongside `[[CUT]]`
+markers in the same block. Keep flag notes short (they render as marker names);
+the full explanation still goes in notes.md.
+
+**`<stem>.notes.md`** — one per file. Sections: **Deletions** (what & why, with
+timestamps), **Within-block trims**, **⚠ Flags** (anything uncertain or any
+suspected content/math issue — flag-not-fix), and **Sense check** (does it read
+end to end; note the per-example math is intact). Lead with the flags when the
+file needs real review (meta-notes, broken keep-last, missing answer, etc.).
+Every ⚠ flag in notes.md should normally have a matching `[[FLAG]]` in the SRT.
 
 ## Sense check (after editing, and after export)
 

@@ -13,7 +13,7 @@ from pathlib import Path
 from flask import Flask, Response, jsonify, request, send_file, send_from_directory
 
 from transcript_diff import find_deleted_ranges, parse_srt, load_whisper_json
-from papercut_core import export_from_blocks
+from papercut_core import export_from_blocks, DEFAULT_MARGIN, SILENCE_BRIDGE_S
 
 app = Flask(__name__, static_folder="static")
 app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024 * 1024  # 10 GB
@@ -41,9 +41,19 @@ def landing():
 def get_engines():
     """Report which transcription engines are available."""
     engines = {
+        "mlx": {"available": False, "label": "MLX CrisperWhisper (verbatim, fastest)"},
         "whisperx": {"available": False, "label": "WhisperX"},
         "crisperwhisper": {"available": False, "label": "CrisperWhisper (verbatim)"},
     }
+
+    # Check MLX — needs the dedicated venv + converted model (see setup_mlx.sh)
+    here = Path(__file__).resolve().parent
+    mlx_py = here / ".venv-mlx" / "bin" / "python"
+    mlx_model = here / "models" / "crisper-mlx-fp16" / "model.safetensors"
+    if mlx_py.exists() and mlx_model.exists():
+        engines["mlx"]["available"] = True
+    else:
+        engines["mlx"]["reason"] = "MLX engine not set up. Run ./setup_mlx.sh first."
 
     # Check WhisperX
     if shutil.which("whisperx"):
@@ -116,7 +126,7 @@ def transcribe_sse():
     video_path = data.get("video_path", "")
     model = data.get("model", "medium")
     language = data.get("language", "en")
-    engine = data.get("engine", "whisperx")
+    engine = data.get("engine", "mlx")
 
     video = Path(video_path).resolve()
     if not video.exists():
@@ -125,8 +135,8 @@ def transcribe_sse():
     out_dir = video.parent
     stem = video.stem
 
-    if engine == "crisperwhisper":
-        return _transcribe_crisper_sse(video, out_dir, stem, language)
+    if engine in ("mlx", "crisperwhisper"):
+        return _transcribe_engine_sse(video, out_dir, language, engine)
 
     # Default: WhisperX via subprocess
     cmd = [
@@ -180,9 +190,13 @@ def transcribe_sse():
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
-def _transcribe_crisper_sse(video, out_dir, stem, language):
-    """Run CrisperWhisper transcription with SSE progress streaming."""
-    from auto_transcript import transcribe_crisper
+def _transcribe_engine_sse(video, out_dir, language, engine):
+    """Run an in-repo engine (mlx or crisperwhisper) with SSE progress streaming.
+
+    mlx shells out to .venv-mlx (works under any host python); crisperwhisper runs
+    in-process and needs torch + the nyrahealth transformers fork in THIS python.
+    """
+    from auto_transcript import transcribe
     import queue
     import threading
 
@@ -190,16 +204,20 @@ def _transcribe_crisper_sse(video, out_dir, stem, language):
 
     def run_transcription():
         try:
-            result = transcribe_crisper(
+            result = transcribe(
                 str(video), language=language, output_dir=str(out_dir),
+                engine=engine,
                 progress_callback=lambda msg: progress_queue.put(("progress", msg)),
             )
             progress_queue.put(("done", result))
         except Exception as e:
             progress_queue.put(("error", str(e)))
 
+    label = ("MLX CrisperWhisper (verbatim)" if engine == "mlx"
+             else "CrisperWhisper (verbatim mode)")
+
     def generate():
-        yield f"data: {json.dumps({'type': 'start', 'message': 'Starting CrisperWhisper (verbatim mode)...'})}\n\n"
+        yield f"data: {json.dumps({'type': 'start', 'message': f'Starting {label}...'})}\n\n"
 
         thread = threading.Thread(target=run_transcription, daemon=True)
         thread.start()
@@ -221,7 +239,7 @@ def _transcribe_crisper_sse(video, out_dir, stem, language):
                 json_path, srt_path, orig_srt_path = payload
                 result = {
                     "type": "done",
-                    "message": "Transcription complete (CrisperWhisper).",
+                    "message": f"Transcription complete ({label}).",
                     "json_path": str(json_path),
                     "srt_path": str(srt_path),
                     "orig_srt_path": str(orig_srt_path),
@@ -305,7 +323,8 @@ def export_video():
     video_path = data.get("video_path", "")
     json_path = data.get("json_path", "")
     ordered_blocks = data.get("ordered_blocks", [])  # [{id, start, end, text, originalText}, ...]
-    margin = data.get("margin", 0.0)
+    margin = data.get("margin", DEFAULT_MARGIN)
+    bridge = data.get("bridge", SILENCE_BRIDGE_S)
     export_format = data.get("export", "final-cut-pro")
     ffmpeg_args = data.get("ffmpeg_args", "")
     edit_method = data.get("edit_method", "")
@@ -325,8 +344,9 @@ def export_video():
 
         result = export_from_blocks(
             video, ordered_blocks, whisper_data=whisper_data,
-            export_format=export_format, margin=margin, edit_method=edit_method,
-            ffmpeg_args=ffmpeg_args, export_folder=export_folder or None,
+            export_format=export_format, margin=float(margin), bridge=float(bridge),
+            edit_method=edit_method, ffmpeg_args=ffmpeg_args,
+            export_folder=export_folder or None,
         )
         return jsonify(result)
 

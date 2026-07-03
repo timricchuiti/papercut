@@ -972,10 +972,11 @@ mark.search-highlight.current {
           <div class="settings-field full-width">
             <label>Transcription engine</label>
             <select id="settTranscriptionEngine" onchange="updateEngineFields()">
+              <option value="mlx">MLX CrisperWhisper (verbatim, fastest)</option>
               <option value="whisperx">WhisperX</option>
               <option value="crisperwhisper">CrisperWhisper (verbatim)</option>
             </select>
-            <span class="hint">CrisperWhisper preserves filler words (um, uh), stutters, and false starts</span>
+            <span class="hint">MLX runs CrisperWhisper's verbatim model (keeps um, uh, stutters, false starts) ~15-30x faster on Apple Silicon — run ./setup_mlx.sh once</span>
           </div>
           <div class="settings-field" id="settWhisperModelField">
             <label>WhisperX model</label>
@@ -1011,7 +1012,7 @@ mark.search-highlight.current {
           </div>
           <div class="settings-field">
             <label>Default margin (sec)</label>
-            <input type="number" id="settMargin" value="0.10" min="0" max="2" step="0.05">
+            <input type="number" id="settMargin" value="0.07" min="-0.5" max="2" step="0.01">
           </div>
           <div class="settings-field">
             <label>Silent speed</label>
@@ -1165,8 +1166,8 @@ mark.search-highlight.current {
     <div class="export-bar">
       <div class="export-field">
         <span class="export-label">Margin</span>
-        <input type="range" id="marginSlider" min="0" max="1" step="0.05" value="0.10">
-        <span class="range-val" id="marginVal">0.10s</span>
+        <input type="range" id="marginSlider" min="-0.2" max="1" step="0.01" value="0.07">
+        <span class="range-val" id="marginVal">0.07s</span>
       </div>
       <div class="export-field">
         <span class="export-label">Format</span>
@@ -2044,11 +2045,11 @@ function toggleAdvanced() {
 const SETTINGS_KEY = "papercut-settings";
 
 const SETTINGS_DEFAULTS = {
-  transcriptionEngine: "whisperx",
+  transcriptionEngine: "mlx",
   whisperModel: "medium",
   language: "en",
   exportFormat: "final-cut-pro",
-  margin: "0.10",
+  margin: "0.07",
   silentSpeed: "",
   soundedSpeed: "",
   videoCodec: "",
@@ -2062,7 +2063,16 @@ const SETTINGS_DEFAULTS = {
 
 function loadSettings() {
   try {
-    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY));
+    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {};
+    // One-time migration (v2): values saved under the OLD defaults (whisperx
+    // engine, 0.10 margin from the double-applied-margin era) follow the new
+    // defaults. The v marker keeps deliberate re-picks of these values sticky.
+    if (!saved.v || saved.v < 2) {
+      if (saved.transcriptionEngine === "whisperx") delete saved.transcriptionEngine;
+      if (saved.margin === "0.10" || saved.margin === "0.1") delete saved.margin;
+      saved.v = 2;
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(saved));
+    }
     return { ...SETTINGS_DEFAULTS, ...saved };
   } catch {
     return { ...SETTINGS_DEFAULTS };
@@ -2105,6 +2115,7 @@ function applySettings() {
 
 function saveSettings() {
   const s = {
+    v: 2,
     transcriptionEngine: document.getElementById("settTranscriptionEngine").value,
     whisperModel: document.getElementById("settWhisperModel").value,
     language: document.getElementById("settLanguage").value,
@@ -2133,7 +2144,8 @@ function resetSettings() {
 function updateEngineFields() {
   const engine = document.getElementById("settTranscriptionEngine").value;
   const whisperModelField = document.getElementById("settWhisperModelField");
-  whisperModelField.style.display = engine === "crisperwhisper" ? "none" : "";
+  // Model size only applies to WhisperX; mlx/crisperwhisper use a fixed model.
+  whisperModelField.style.display = engine === "whisperx" ? "" : "none";
 }
 
 function toggleSettings() {
