@@ -10,10 +10,32 @@ rather than re-deriving it each session.
 ```
 batch.py transcribe <dir>     # verbatim transcripts (MLX engine by default,
                               #   ~15-30x faster than the transformers path)
+  → WhisperX cross-check pass (scratch dir) + word-level diff vs MLX
   → Claude edits each <stem>.srt + writes <stem>.notes.md
 batch.py export <dir>         # OR per file: main.py … --export final-cut-pro
   → Claude reads the report + notes for sense
 ```
+
+## Two-pass transcription (standard, Tim-approved 2026-07)
+
+Every file gets TWO reads before editing:
+1. **MLX (CrisperWhisper weights) — canonical.** The verbatim transcript and the
+   word-level timestamps that place every cut. Edit THIS file's SRT.
+2. **WhisperX large-v3 — text witness, never timing.** Transcribe to a scratch
+   dir, then word-level diff against MLX. Agreements are trusted; every
+   disagreement gets scrutinized before editing (typical catches: hallucination
+   loops over real quiet speech, garbled numbers, mis-heard names). WhisperX
+   smooths fillers/re-takes by design, so re-takes present in MLX but "missing"
+   from WhisperX are usually REAL — that's CrisperWhisper's verbatim value, not
+   an error.
+
+**Tiebreaker only:** the transformers `crisperwhisper` engine (same weights as
+MLX, different runtime → different failure modes) is run ONLY on a specific
+suspicious region/file when the MLX↔WhisperX disagreement can't be resolved from
+context. Never as a routine pass (~50x slower for the same words). Run it
+single-file in a fresh subprocess — `--in-process` batch mode has stalled.
+Beware its chunk-overlap artifact: phantom doubled phrases with REWOUND
+timestamps are the runtime stitching, not real re-takes.
 
 Run everything under the CrisperWhisper venv: `.venv-crisper/bin/python …`
 (transcription shells out to `.venv-mlx` automatically for the default engine).
