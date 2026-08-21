@@ -216,6 +216,12 @@ def resolve_word_edits(ordered_blocks, whisper_data, max_gap, warnings=None):
                     for (tok, is_cut), bw in zip(word_toks, block_words)
                     if not is_cut
                 ]
+                if not kept_word_times:
+                    # Every word is inside a [[CUT]] span and the markers placed
+                    # exactly: the whole block is an intentional cut. Drop it —
+                    # don't fall through to the "nothing matched, keep whole"
+                    # safety net below (that path is for fuzzy-edit misses).
+                    continue
             else:
                 # Marker tokens don't line up 1:1 with the audio's words (usually
                 # an oddly-tokenized word: a glued stutter, an [UM], or a split
