@@ -45,7 +45,8 @@ def get_media_info(path):
         "-show_entries", "format=duration",
         "-show_entries",
         "stream=codec_type,width,height,r_frame_rate,sample_rate,"
-        "pix_fmt,color_space,color_primaries,color_transfer",
+        "pix_fmt,color_space,color_primaries,color_transfer"
+        ":stream_disposition=attached_pic",
         "-print_format", "json",
         str(path),
     ]
@@ -71,6 +72,10 @@ def get_media_info(path):
     for stream in data.get("streams", []):
         codec_type = stream.get("codec_type")
         if codec_type == "video":
+            # Embedded cover art is a "video" stream with a bogus 90000/1 frame
+            # rate; letting it overwrite the real stream breaks silence detection.
+            if stream.get("disposition", {}).get("attached_pic") or info["has_video"]:
+                continue
             info["has_video"] = True
             if stream.get("width"):
                 info["width"] = int(stream["width"])
