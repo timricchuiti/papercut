@@ -13,7 +13,7 @@ from pathlib import Path
 from flask import Flask, Response, jsonify, request, send_file, send_from_directory
 
 from transcript_diff import find_deleted_ranges, parse_srt, load_whisper_json
-from papercut_core import export_from_blocks, DEFAULT_MARGIN, SILENCE_BRIDGE_S
+from papercut_core import export_from_blocks, DEFAULT_MARGIN, SILENCE_BRIDGE_S, EDGE_SNAP_S
 
 app = Flask(__name__, static_folder="static")
 app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024 * 1024  # 10 GB
@@ -325,6 +325,7 @@ def export_video():
     ordered_blocks = data.get("ordered_blocks", [])  # [{id, start, end, text, originalText}, ...]
     margin = data.get("margin", DEFAULT_MARGIN)
     bridge = data.get("bridge", SILENCE_BRIDGE_S)
+    snap = data.get("snap", EDGE_SNAP_S)
     export_format = data.get("export", "final-cut-pro")
     ffmpeg_args = data.get("ffmpeg_args", "")
     edit_method = data.get("edit_method", "")
@@ -345,7 +346,7 @@ def export_video():
         result = export_from_blocks(
             video, ordered_blocks, whisper_data=whisper_data,
             export_format=export_format, margin=float(margin), bridge=float(bridge),
-            edit_method=edit_method, ffmpeg_args=ffmpeg_args,
+            snap=float(snap), edit_method=edit_method, ffmpeg_args=ffmpeg_args,
             export_folder=export_folder or None,
         )
         return jsonify(result)

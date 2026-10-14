@@ -14,6 +14,8 @@ Pipeline:
       -> generate_fcpxml() / generate_premiere_xml() / export_video()
 """
 
+import bisect
+import difflib
 import re
 from pathlib import Path
 
@@ -44,6 +46,17 @@ DEFAULT_MARGIN = 0.07
 # clips and sound choppy. Longer gaps are real pauses and get cut. Decoupled from
 # `margin` (which only controls how tight the kept edges are), mirroring auto-editor.
 SILENCE_BRIDGE_S = 0.20
+
+# Edge snap (seconds): MLX/CrisperWhisper word timestamps can END early (clipping a
+# word's tail: "ninety thousan-") or START late (clipping an onset: "-urthermore").
+# After silence detection, a kept edge that still sits inside loud audio is pushed
+# outward to the loud range's edge — but never past the neighbouring source word
+# (which may be a cut take) and never more than this many seconds. 0 disables.
+EDGE_SNAP_S = 0.5
+
+# Words shorter than this (seconds) are zero-width "ghost" tokens from an MLX
+# decoding loop, not real speech; they are ignored when looking up neighbours.
+GHOST_WORD_S = 0.02
 
 # [[FLAG: note]] annotations in a block's text become FCPXML markers at that block's
 # start time (visible on the FCP timeline), and are stripped before word matching.
@@ -90,18 +103,27 @@ _CUT_CLOSE_RE = re.compile(r"\[\[\s*/\s*CUT\s*\]\]", re.IGNORECASE)
 
 
 def has_cut_markers(text):
-    return bool(_CUT_OPEN_RE.search(text or ""))
+    """True if the text carries an opening OR closing cut marker.
+
+    A lone [[/CUT]] matters too: it closes a span that was opened in an earlier
+    block (cross-block cuts — see resolve_word_edits).
+    """
+    text = text or ""
+    return bool(_CUT_OPEN_RE.search(text) or _CUT_CLOSE_RE.search(text))
 
 
-def tokenize_with_cuts(text):
+def tokenize_with_cuts(text, in_cut=False):
     """Split text into (word, is_cut) tokens, honoring [[CUT]]..[[/CUT]] spans.
 
-    Markers may be glued to words; they are isolated before splitting. An
-    unclosed [[CUT]] cuts to the end of the block.
+    Markers may be glued to words; they are isolated before splitting. `in_cut`
+    is the state carried in from the previous block: an unclosed [[CUT]] cuts to
+    the end of the block AND into the following blocks until a [[/CUT]] appears,
+    so a re-take that straddles an SRT block boundary needs no manual block merge.
+    Returns (tokens, in_cut_at_end).
     """
     t = _CUT_OPEN_RE.sub(f" {CUT_OPEN} ", text)
     t = _CUT_CLOSE_RE.sub(f" {CUT_CLOSE} ", t)
-    tokens, in_cut = [], False
+    tokens = []
     for tok in t.split():
         if tok == CUT_OPEN:
             in_cut = True
@@ -109,7 +131,30 @@ def tokenize_with_cuts(text):
             in_cut = False
         else:
             tokens.append((tok, in_cut))
-    return tokens
+    return tokens, in_cut
+
+
+def _align_tokens(word_toks, block_words):
+    """Align text tokens to source words by text when the counts don't match.
+
+    Returns one block_words index per token, or None if any token has no match.
+    Used when the time-window word pick-up for a block grabbed extra words — a
+    zero-width ghost loop sitting exactly on the block boundary gets counted into
+    both neighbouring blocks — so a 1:1 positional zip is impossible. Only an
+    alignment that places EVERY text token is accepted; otherwise the caller
+    keeps the block whole and warns (never a fuzzy cut of the wrong words).
+    """
+    a = [normalize_word(t) for t, _ in word_toks]
+    b = [normalize_word(w["word"]) for w in block_words]
+    sm = difflib.SequenceMatcher(None, a, b, autojunk=False)
+    idx = [None] * len(a)
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == "equal":
+            for k in range(i2 - i1):
+                idx[i1 + k] = j1 + k
+    if any(i is None for i in idx):
+        return None
+    return idx
 
 
 def _merge_times_to_ranges(kept_word_times, max_gap):
@@ -157,11 +202,14 @@ def resolve_word_edits(ordered_blocks, whisper_data, max_gap, warnings=None):
 
     Three cases per block:
       1. Not edited -> keep the whole block.
-      2. Has [[CUT]] markers -> drop exactly the marked words (positional, exact)
-         when the token count matches the block's words. If it does NOT match,
-         a [[CUT]] cannot be placed precisely, so the block is kept WHOLE and a
-         warning is appended to `warnings` (never a silent fuzzy cut that could
-         remove the wrong words).
+      2. Has [[CUT]] markers -> drop exactly the marked words. Positional when the
+         token count matches the block's words; otherwise aligned by text (the
+         usual mismatch is a zero-width ghost loop on the block boundary that got
+         picked up by both neighbours). If a [[CUT]] still cannot be placed, the
+         block is kept WHOLE and a warning is appended to `warnings` (never a
+         silent fuzzy cut that could remove the wrong words).
+         An unclosed [[CUT]] carries into the following blocks until a [[/CUT]]
+         closes it, so a re-take spanning two SRT blocks is one cut.
       3. Free-text edit (no markers) -> keep the surviving words, matched RIGHTMOST
          so that repeated takes resolve to the LAST occurrence.
 
@@ -185,11 +233,22 @@ def resolve_word_edits(ordered_blocks, whisper_data, max_gap, warnings=None):
             if "start" in w and "end" in w:
                 all_words.append(w)
 
+    def warn(block, text, why):
+        if warnings is None:
+            return
+        mm = int(block["start"] // 60)
+        ss = block["start"] - mm * 60
+        snip = re.sub(r"\s+", " ", text).strip()
+        snip = (snip[:64] + "…") if len(snip) > 64 else snip
+        warnings.append(f"[[CUT]] at {mm}:{ss:05.2f} not placed ({why}) — "
+                        f"block kept WHOLE, fix by hand: \"{snip}\"")
+
     resolved = []
+    in_cut = False  # cut-span state carried across blocks
     for block in ordered_blocks:
         text = block.get("text", "")
         original_text = block.get("originalText", "")
-        marked = has_cut_markers(text)
+        marked = has_cut_markers(text) or in_cut
 
         # (1) Untouched block -> keep whole.
         if not marked and (not original_text or text == original_text):
@@ -200,45 +259,36 @@ def resolve_word_edits(ordered_blocks, whisper_data, max_gap, warnings=None):
             w for w in all_words
             if w["start"] >= block["start"] - 0.05 and w["end"] <= block["end"] + 0.05
         ]
-        if not block_words:
-            resolved.append({"start": block["start"], "end": block["end"]})
-            continue
 
         kept_word_times = None
 
-        # (2) Exact positional cut via markers.
+        # (2) Exact cut via markers (positional, else text-aligned).
         if marked:
-            toks = tokenize_with_cuts(text)
+            toks, in_cut = tokenize_with_cuts(text, in_cut)
             word_toks = [t for t in toks if normalize_word(t[0])]
-            if len(word_toks) == len(block_words):
-                kept_word_times = [
-                    (bw["start"], bw["end"])
-                    for (tok, is_cut), bw in zip(word_toks, block_words)
-                    if not is_cut
-                ]
-                if not kept_word_times:
-                    # Every word is inside a [[CUT]] span and the markers placed
-                    # exactly: the whole block is an intentional cut. Drop it —
-                    # don't fall through to the "nothing matched, keep whole"
-                    # safety net below (that path is for fuzzy-edit misses).
-                    continue
-            else:
-                # Marker tokens don't line up 1:1 with the audio's words (usually
-                # an oddly-tokenized word: a glued stutter, an [UM], or a split
-                # number). A [[CUT]] can't be placed exactly, and fuzzy-cutting
-                # risks removing the WRONG words — so keep the block WHOLE and warn
-                # so the edit gets fixed by hand instead of silently mis-cut.
-                if warnings is not None:
-                    mm = int(block["start"] // 60)
-                    ss = block["start"] - mm * 60
-                    snip = re.sub(r"\s+", " ", text).strip()
-                    snip = (snip[:64] + "…") if len(snip) > 64 else snip
-                    warnings.append(
-                        f"[[CUT]] at {mm}:{ss:05.2f} not placed (token/word "
-                        f"mismatch) — block kept WHOLE, fix by hand: \"{snip}\""
-                    )
+            if word_toks and all(is_cut for _, is_cut in word_toks):
+                # Every word is inside a cut span (explicitly, or the block sits
+                # wholly inside a carried-over span): drop the block.
+                continue
+            if not block_words or not word_toks:
                 resolved.append({"start": block["start"], "end": block["end"]})
                 continue
+            if len(word_toks) == len(block_words):
+                pairs = zip(word_toks, block_words)
+            else:
+                idx = _align_tokens(word_toks, block_words)
+                if idx is None:
+                    warn(block, text, "token/word mismatch")
+                    resolved.append({"start": block["start"], "end": block["end"]})
+                    continue
+                pairs = ((tok, block_words[i]) for tok, i in zip(word_toks, idx))
+            kept_word_times = [(bw["start"], bw["end"])
+                               for (tok, is_cut), bw in pairs if not is_cut]
+            if not kept_word_times:
+                continue  # all matched words cut -> intentional whole-block cut
+        elif not block_words:
+            resolved.append({"start": block["start"], "end": block["end"]})
+            continue
 
         # (3) Rightmost free-text match (keep-last).
         if kept_word_times is None:
@@ -255,9 +305,60 @@ def resolve_word_edits(ordered_blocks, whisper_data, max_gap, warnings=None):
     return resolved
 
 
+def snap_to_speech(ranges, loud_ranges, whisper_data, max_snap=EDGE_SNAP_S):
+    """Push kept-range edges outward to the loud edge when audio is still sounding.
+
+    Word timestamps are the cut positions, but MLX word ENDS can be early and
+    STARTS late by a few hundred ms, so intersecting with the loud ranges alone
+    clips word tails/onsets wherever a kept edge is followed/preceded by silence.
+    For each range edge that falls inside a loud range, extend it to that loud
+    range's edge (which already carries the user's margin), bounded by:
+      - the next/previous real source word (so a cut take right next door is
+        never pulled back in — the edge stops at that word's boundary), and
+      - `max_snap` seconds.
+    Edges already in silence are left alone. Zero-width ghost words are ignored.
+    Returns a new list of {"start","end"} ranges (same order).
+    """
+    if not ranges or max_snap <= 0 or not loud_ranges or not whisper_data:
+        return ranges
+    words = sorted(
+        ((w["start"], w["end"]) for seg in whisper_data.get("segments", [])
+         for w in seg.get("words", [])
+         if "start" in w and "end" in w and w["end"] - w["start"] >= GHOST_WORD_S),
+    )
+    starts = [a for a, _ in words]
+    ends = sorted(b for _, b in words)
+    loud = sorted(loud_ranges)
+    loud_starts = [a for a, _ in loud]
+
+    def loud_at(t):
+        i = bisect.bisect_right(loud_starts, t) - 1
+        if i >= 0 and loud[i][0] <= t < loud[i][1]:
+            return loud[i]
+        return None
+
+    out = []
+    for r in ranges:
+        s, e = r["start"], r["end"]
+        L = loud_at(e - 1e-6)
+        if L and L[1] > e:
+            # Next word = first word starting at/after this edge (a word that
+            # abuts the edge exactly counts — it is the cut take's first word).
+            j = bisect.bisect_left(starts, e - 0.01)
+            nxt = starts[j] if j < len(starts) else float("inf")
+            e = max(e, min(L[1], nxt, e + max_snap))
+        L = loud_at(s)
+        if L and L[0] < s:
+            j = bisect.bisect_right(ends, s + 0.01) - 1
+            prv = ends[j] if j >= 0 else float("-inf")
+            s = min(s, max(L[0], prv, s - max_snap))
+        out.append({"start": s, "end": e})
+    return out
+
+
 def build_clips(video, ordered_blocks, whisper_data, margin=DEFAULT_MARGIN,
                 threshold=DEFAULT_THRESHOLD, bridge=SILENCE_BRIDGE_S,
-                media_info=None, warnings=None):
+                media_info=None, warnings=None, snap=EDGE_SNAP_S):
     """Resolve edits + silence-detect + build the final clip list.
 
     `margin` (seconds) controls only how tight the kept edges are: > 0 pads each clip
@@ -267,6 +368,8 @@ def build_clips(video, ordered_blocks, whisper_data, margin=DEFAULT_MARGIN,
     micro-pauses) instead of shattering a sentence into dozens of clips.
 
     Returns (clips, media_info). Raises ValueError if no clips result.
+    `snap` (seconds) caps how far a kept edge may move outward to the loud edge
+    (see snap_to_speech); 0 disables snapping.
     `warnings`: optional list for marker-placement failures (see resolve_word_edits).
     """
     video = Path(video)
@@ -284,6 +387,11 @@ def build_clips(video, ordered_blocks, whisper_data, margin=DEFAULT_MARGIN,
     # 2. Margin: pad (>0) or erode (<0) the kept edges — the only role margin plays.
     apply_margin(is_loud, round(margin * frame_rate))
     kept_ranges = get_kept_ranges(is_loud, frame_rate)
+    # 3. Snap: a kept edge still inside loud audio moves out to the loud edge
+    #    (bounded by the neighbouring word) so early word-ends / late word-starts
+    #    from the transcriber don't clip tails and onsets.
+    resolved_blocks = snap_to_speech(resolved_blocks, kept_ranges, whisper_data,
+                                     max_snap=snap)
 
     clips = build_clip_list(resolved_blocks, kept_ranges)
     if not clips:
@@ -336,7 +444,7 @@ def export_from_blocks(video, ordered_blocks, whisper_data=None,
                        export_format="final-cut-pro", margin=DEFAULT_MARGIN,
                        threshold=DEFAULT_THRESHOLD, bridge=SILENCE_BRIDGE_S,
                        edit_method="", ffmpeg_args=None, output_path=None,
-                       export_folder=None):
+                       export_folder=None, snap=EDGE_SNAP_S):
     """High-level export from a list of ordered blocks (the GUI's data shape).
 
     Args:
@@ -347,6 +455,7 @@ def export_from_blocks(video, ordered_blocks, whisper_data=None,
         margin: Edge tightness in seconds (>0 breath, <0 tighter, 0 at the speech).
         threshold: Silence amplitude threshold (overridden by edit_method if set).
         bridge: Keep silent gaps up to ~2*bridge seconds inside speech (defrag knob).
+        snap: Max seconds a kept edge may extend to the loud edge (0 = off).
         edit_method: e.g. "audio:threshold=0.04" — parsed for threshold.
         ffmpeg_args: Extra args for the "video" format.
         output_path: Explicit output path (else derived).
@@ -380,7 +489,7 @@ def export_from_blocks(video, ordered_blocks, whisper_data=None,
     warnings = []
     clips, media_info = build_clips(video, ordered_blocks, whisper_data,
                                     margin=margin, threshold=threshold,
-                                    bridge=bridge, warnings=warnings)
+                                    bridge=bridge, warnings=warnings, snap=snap)
 
     if output_path is None:
         output_path = resolve_output_path(video, export_format, export_folder)
@@ -456,7 +565,8 @@ def srt_to_ordered_blocks(edited_srt, orig_srt=None):
 def export_from_srt(video, edited_srt, whisper_json=None, orig_srt=None,
                     export_format="final-cut-pro", margin=DEFAULT_MARGIN,
                     threshold=DEFAULT_THRESHOLD, bridge=SILENCE_BRIDGE_S,
-                    ffmpeg_args=None, output_path=None, export_folder=None):
+                    ffmpeg_args=None, output_path=None, export_folder=None,
+                    snap=EDGE_SNAP_S):
     """Headless export: edited SRT (+ original + JSON) -> output file.
 
     This is the CLI twin of the GUI export. Deleted SRT blocks are dropped;
@@ -489,5 +599,5 @@ def export_from_srt(video, edited_srt, whisper_json=None, orig_srt=None,
         video, ordered_blocks, whisper_data=whisper_data,
         export_format=export_format, margin=margin, threshold=threshold,
         bridge=bridge, ffmpeg_args=ffmpeg_args, output_path=output_path,
-        export_folder=export_folder,
+        export_folder=export_folder, snap=snap,
     )

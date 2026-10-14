@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 
 from auto_transcript import transcribe
-from papercut_core import export_from_srt, DEFAULT_MARGIN, SILENCE_BRIDGE_S
+from papercut_core import export_from_srt, DEFAULT_MARGIN, SILENCE_BRIDGE_S, EDGE_SNAP_S
 
 
 def open_in_editor(filepath):
@@ -65,6 +65,10 @@ def main():
     parser.add_argument("--bridge", type=float, default=SILENCE_BRIDGE_S,
                         help="Keep silent gaps up to ~2x this inside speech instead "
                              f"of cutting them (default: {SILENCE_BRIDGE_S})")
+    parser.add_argument("--snap", type=float, default=EDGE_SNAP_S,
+                        help="Max seconds a kept edge may extend outward to the loud "
+                             "edge when the transcriber's word timing clipped a tail "
+                             f"or onset; 0 disables (default: {EDGE_SNAP_S})")
     parser.add_argument("--threshold", type=float, default=0.04,
                         help="Silence amplitude threshold (default: 0.04)")
     parser.add_argument("--ffmpeg-args", default=None,
@@ -121,6 +125,7 @@ def main():
         orig_srt=str(orig_srt) if orig_srt.exists() else None,
         export_format=args.export, margin=args.margin, threshold=args.threshold,
         bridge=args.bridge, ffmpeg_args=args.ffmpeg_args, output_path=args.output,
+        snap=args.snap,
     )
 
     src = result.get("source_duration") or 0.0
