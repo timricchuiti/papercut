@@ -215,7 +215,7 @@ def _fcp_format_name(width, height, fr_num, fr_den):
     return "FFVideoFormatRateUndefined"
 
 
-def generate_fcpxml(media_path, clips, media_info, flags=None):
+def generate_fcpxml(media_path, clips, media_info, flags=None, project_name=None):
     """Generate FCPXML 1.11 string for Final Cut Pro / DaVinci Resolve.
 
     Args:
@@ -230,6 +230,10 @@ def generate_fcpxml(media_path, clips, media_info, flags=None):
         FCPXML string.
     """
     p = Path(media_path)
+    # Project/sequence name: the OUTPUT file's stem when given (so two cuts of the
+    # same source — e.g. _ALTERED and _SHORT_ALTERED — don't collide in FCP), else
+    # the legacy <media stem>_ALTERED.
+    project_name = project_name or f"{p.stem}_ALTERED"
     fr_num = media_info["frame_rate_num"]
     fr_den = media_info["frame_rate_den"]
     has_video = media_info["has_video"]
@@ -338,7 +342,7 @@ def generate_fcpxml(media_path, clips, media_info, flags=None):
   </resources>
   <library>
     <event name="PaperCut Import">
-      <project name="{xml_escape(p.stem)}_ALTERED">
+      <project name="{xml_escape(project_name)}">
         <sequence format="r1" tcStart="0s" tcFormat="NDF" audioLayout="stereo" audioRate="{audio_rate}">
           <spine>
 {spine_xml}
@@ -351,7 +355,7 @@ def generate_fcpxml(media_path, clips, media_info, flags=None):
 """
 
 
-def generate_premiere_xml(media_path, clips, media_info):
+def generate_premiere_xml(media_path, clips, media_info, project_name=None):
     """Generate FCP7 XML (Premiere Pro compatible) string.
 
     Args:
@@ -363,6 +367,10 @@ def generate_premiere_xml(media_path, clips, media_info):
         FCP7 XML string.
     """
     p = Path(media_path)
+    # Project/sequence name: the OUTPUT file's stem when given (so two cuts of the
+    # same source — e.g. _ALTERED and _SHORT_ALTERED — don't collide in FCP), else
+    # the legacy <media stem>_ALTERED.
+    project_name = project_name or f"{p.stem}_ALTERED"
     filename = p.name
     fr = media_info["frame_rate"]
     duration_frames = round(media_info["duration"] * fr)
@@ -421,7 +429,7 @@ def generate_premiere_xml(media_path, clips, media_info):
 <!DOCTYPE xmeml>
 <xmeml version="5">
   <sequence>
-    <name>{xml_escape(p.stem)}_ALTERED</name>
+    <name>{xml_escape(project_name)}</name>
     <duration>{total_tl_frames}</duration>
     <rate><timebase>{timebase}</timebase><ntsc>FALSE</ntsc></rate>
     <media>

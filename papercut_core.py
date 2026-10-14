@@ -301,13 +301,18 @@ def write_export(video, clips, media_info, export_format, output_path,
     video = str(video)
     output_path = str(output_path)
 
+    # The FCP/Premiere project is named after the OUTPUT file, so several cuts of
+    # one source (foo_ALTERED, foo_SHORT_ALTERED) import as distinct projects.
+    project_name = Path(output_path).stem
     if export_format in ("final-cut-pro", "resolve"):
         Path(output_path).write_text(
-            generate_fcpxml(video, clips, media_info, flags=flags),
+            generate_fcpxml(video, clips, media_info, flags=flags,
+                            project_name=project_name),
             encoding="utf-8")
     elif export_format == "premiere":
         Path(output_path).write_text(
-            generate_premiere_xml(video, clips, media_info), encoding="utf-8")
+            generate_premiere_xml(video, clips, media_info,
+                                  project_name=project_name), encoding="utf-8")
     elif export_format == "video":
         extra = ffmpeg_args.split() if ffmpeg_args else None
         export_video(video, clips, output_path, extra_args=extra)
