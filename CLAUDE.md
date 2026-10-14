@@ -40,6 +40,8 @@ On export:
 | `mlx_transcribe.py` | **MLX engine** (default) — runs CrisperWhisper weights via Apple MLX, ~15-30x faster; sets alignment heads + CrisperWhisper word-grouping. Runs under `.venv-mlx`. |
 | `setup_mlx.sh` | One-time MLX setup: build `.venv-mlx`, convert CrisperWhisper → MLX fp16 at `models/` |
 | `main.py` | Single-file CLI (transcribe / edit / export via `papercut_core`) |
+| `tools/` | Post-export + verification helpers (witness diff, edge scan, clip list, setin/setout/dropclips, pause policy …) — see `tools/README.md`. `~/Documents/Projects/_claude/papercut_*.py` are symlinks here. |
+| `test_papercut_core.py` | Unit tests for cut placement + edge snap (`.venv-crisper/bin/python -m unittest test_papercut_core`) |
 
 ## Tech Stack
 
@@ -71,6 +73,9 @@ On export:
 .venv-crisper/bin/python main.py video.mp4 --transcribe-only
 .venv-crisper/bin/python main.py video.mp4 --export final-cut-pro
 
+# Tests (no media needed):
+.venv-crisper/bin/python -m unittest test_papercut_core
+
 # Browser GUI:
 python3 web_gui.py --port 5009
 ```
@@ -83,6 +88,9 @@ python3 web_gui.py --port 5009
 - **Two cut knobs** (margin was double-applied + conflated with pause-bridging until 2026-06; don't regress):
   - `--margin` (default **0.07**, Tim's preference) — edge tightness ONLY, applied once in `silence.apply_margin`. `>0` breath, `0` at the speech, `<0` erodes tighter. `build_clip_list` adds NO margin of its own.
   - `--bridge` (default 0.20) — keep silent gaps up to ~2× this inside speech (morphological close) so sentences don't fragment; longer pauses get cut.
+  - `--snap` (default 0.5) — after silence detection, a kept edge still inside loud audio moves out to the loud edge, bounded by the neighbouring source word (`snap_to_speech`). Repairs MLX's early word-ends / late word-starts; `0` disables.
+- **`[[CUT]]` placement** (`resolve_word_edits`): positional when the block's token count matches its words; otherwise aligned by text (difflib) — ghost words on a block boundary used to make the block silently keep whole. Still unplaceable → block kept WHOLE + warning, never a fuzzy cut. An unclosed `[[CUT]]` carries across blocks until `[[/CUT]]`.
+- The project name is the OUTPUT file's stem, so several cuts of one source import as distinct FCP projects.
 - **`[[FLAG: note]]`** in an SRT block → FCPXML `<marker>` on the containing clip (stripped before word matching). See `EDITING_PROTOCOL.md`.
 
 ## Design Constraints

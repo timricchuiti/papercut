@@ -91,6 +91,12 @@ python3 main.py my_video.mp4 \
   --export final-cut-pro
 ```
 
+Cut knobs: `--margin` (edge breath, default 0.07), `--bridge` (keep micro-pauses up
+to ~2× this, default 0.20), `--snap` (let a kept edge extend to the end of the
+actual speech when the transcriber's word timing clipped it, max seconds, default
+0.5). Several cuts of one source? Give each `--output` a different name — the
+project is named after the output file.
+
 ---
 
 ## Installation
@@ -118,6 +124,9 @@ papercut/
 ├── auto_transcript.py     # WhisperX transcription wrapper
 ├── transcript_diff.py     # Diff engine — detects deleted blocks
 ├── main.py                # CLI orchestrator (full pipeline)
+├── papercut_core.py       # Shared export core (cut placement, silence, snap)
+├── tools/                 # Post-export helpers: edge scan, clip list, setin/setout, pause policy …
+├── test_papercut_core.py  # Unit tests for cut placement
 ├── static/
 │   └── index.html         # Web GUI frontend (single-file HTML/CSS/JS)
 └── requirements.txt

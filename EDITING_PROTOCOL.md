@@ -22,7 +22,10 @@ Every file gets TWO reads before editing:
 1. **MLX (CrisperWhisper weights) — canonical.** The verbatim transcript and the
    word-level timestamps that place every cut. Edit THIS file's SRT.
 2. **WhisperX large-v3 — text witness, never timing.** Transcribe to a scratch
-   dir, then word-level diff against MLX. Agreements are trusted; every
+   dir (`main.py … --transcribe-only --engine whisperx --model large-v3
+   --output-dir <scratch>`), keep a copy beside the source as `<stem>.wx.srt` /
+   `<stem>.wx.json`, then word-level diff against MLX with
+   `tools/papercut_witness_diff.py <stem>.srt.orig <stem>.wx.srt`. Agreements are trusted; every
    disagreement gets scrutinized before editing (typical catches: hallucination
    loops over real quiet speech, garbled numbers, mis-heard names). WhisperX
    smooths fillers/re-takes by design, so re-takes present in MLX but "missing"
@@ -47,6 +50,12 @@ Run everything under the CrisperWhisper venv: `.venv-crisper/bin/python …`
   instinct — his "-0.1 feel" maps to a small POSITIVE value here.
 - **bridge** — keep silent gaps up to ~2× this inside speech (default 0.20s) so
   sentences don't fragment; longer pauses are cut.
+- **snap** — after silence detection, a kept edge that still sits inside loud
+  audio moves outward to the loud edge, bounded by the neighbouring source word
+  and by this many seconds (default 0.5; `--snap 0` disables). It repairs the
+  transcriber's early word-ENDs / late word-STARTs ("ninety thousan-",
+  "-urthermore") without pulling a cut take back in. It cannot recover words MLX
+  never emitted (ghost loops) — those still need `papercut_setout.py` by hand.
 
 Output `<stem>_ALTERED.fcpxml` + `<stem>.notes.md` next to the source `.mp4`,
 referencing the original. Leave `<stem>.srt.orig` untouched (diff baseline).
@@ -95,8 +104,15 @@ re-take that called the 2nd component "the first"; keep the clean/correct one.)
    stays 1:1 with the word-level JSON, each marked word maps to its exact
    timestamp — no fuzzy matching, and Tim can see precisely what was removed.
    Multiple cut spans per block are fine. **Reproduce the block's original text
-   exactly** (only insert the markers); if the token count drifts, the exporter
-   falls back to fuzzy matching.
+   exactly** (only insert the markers). If the token count doesn't match the
+   block's words (usually a zero-width ghost loop on the block boundary that got
+   counted into both neighbours), the exporter aligns tokens to words by text;
+   if even that can't place every token it keeps the block WHOLE and prints a
+   `[[CUT]] … not placed` warning — it never guesses. Fix the text and re-export.
+   **Cuts may span blocks:** an unclosed `[[CUT]]` carries into the following
+   blocks until a `[[/CUT]]` closes it, so a re-take that straddles a block
+   boundary needs no manual block merge; blocks wholly inside the span are
+   dropped.
 2. **Plain deletion — fine for whole takes / lines.** Delete the words you don't
    want; when a fragment repeats, the matcher resolves **rightmost**, so deleting
    down to one copy keeps the last occurrence. Whole-block deletion is the
@@ -166,6 +182,60 @@ Every ⚠ flag in notes.md should normally have a matching `[[FLAG]]` in the SRT
 - Cuts are non-destructive (Tim expands any cut in FCP later), so when genuinely
   unsure whether to cut, **flag and lean toward keeping** rather than dropping
   content silently.
+- **Run the edge scan** on every delivered FCPXML:
+  `tools/papercut_edgescan.py <fcpxml> <json> <media>`. It lists (a) short clips
+  with no words — noise fragments from a mis-timed word, drop them with
+  `papercut_dropclips.py`; (b) sound within 0.5 s outside a clip edge that no
+  cut word explains — a clipped tail/onset, check the waveform and fix with
+  `papercut_setout.py` / `papercut_setin.py`. Finish with `papercut_clips.py …
+  | tail -1` (tiles=True). The tools are listed in `tools/README.md`.
+- **Reconstruct the played text** (strip `[[CUT]]…[[/CUT]]` spans from the edited
+  SRT and read it end to end) — it catches a cut that removed the wrong copy.
+
+## Transcriber failure modes to expect (MLX / CrisperWhisper)
+
+Seen on every long recording; the witness diff and the edge scan exist for them:
+- **Ghost loops** — runs of zero-width words (`start == end`) where the decoder
+  stalled; the real words there are often missing from the text entirely
+  (`papercut_words.py` flags them `<ZERO>`). WhisperX usually has the words; the
+  exporter can't place what MLX never emitted, so restore the span by hand with
+  `papercut_setout.py` and drop a `[[FLAG]]`.
+- **Hallucinations over silence** — "Okay.", "The.", stray sentences in a long
+  pause. Both engines + the waveform decide; the witness diff shows them.
+- **Early word ends / late word starts** — a few hundred ms; `snap` repairs most,
+  the edge scan shows the rest.
+- **Mis-timed words placed in silence** — a word stamped a second early lands on
+  a cough or an off-mic noise and the export keeps that noise as a clip; shows up
+  as a short no-word clip in the edge scan.
+- **Pause-stretched final words** (`<LONG>`) — harmless; silence detection trims
+  them.
+- **Notes written from another transcript** (a pipeline Claude's edit notes) may
+  describe lines that are not in the audio — the writer's engine hallucinated
+  them. Verify each note against MLX + WhisperX + RMS before cutting.
+
+## Where files go
+
+- **Polymathematic reads** (`~/Movies/Capture/<stem>PC.mp4`): the FCPXML(s) stay
+  beside the source for Tim to import; `.srt`, `.srt.orig`, `.json`, `.wx.*`,
+  any variant SRTs and `<stem>.notes.md` go to `~/Movies/PM/sidecars/` — never
+  left in Capture. Several cuts of one source get distinct output names
+  (`<stem>_ALTERED`, `<stem>_SHORT_ALTERED`); the project name follows the file.
+- **DeltaMath lessons** (`~/Movies/DM/<project>/<stem>PC.mp4`): processed in
+  place — FCPXML, notes, sidecars and witness copies all stay in the folder.
+- Deletions go to the Trash, never `rm`; original device recordings are never
+  touched; nothing is committed or pushed unless Tim asks.
+
+## Screen recordings (DeltaMath): the pause policy
+
+DM lessons are screen recordings where the pauses carry on-screen action
+(typing, dropdown selection). Per the 543 edit notes (2026-10): standard export
+first, then `tools/papercut_pausepolicy.py <fcpxml> <json> <audio16k.wav>
+--motion <cnt10.npy>`: pure pauses ≤ 2 s are kept whole, longer ones are cut to
+1 s of air with the removed window placed to swallow the most screen motion /
+off-mic sound; gaps that contain cut words (flubs) stay tight unless
+`--override t=air`. The motion profile is a changed-pixel count per 0.1 s from a
+320×180 gray ffmpeg proxy. **Tim's VO reads do NOT get this** — they keep the
+bridge-only cut.
 
 ## Reduction is usually high — that's fine
 
