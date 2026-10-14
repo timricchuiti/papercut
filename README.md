@@ -27,7 +27,7 @@ pip install -r requirements.txt
 python3 web_gui.py
 ```
 
-Open **http://localhost:5000** in your browser, then:
+Open **http://localhost:5009** in your browser, then:
 
 1. **Drop a video** (or paste a local path) — WhisperX transcribes it automatically
 2. **Edit the transcript** — delete blocks, edit text, or use the auto-edit tools:

@@ -6,7 +6,7 @@ A transcript-based editing tool for video and audio. Transcribe media verbatim (
 
 **Two interfaces, one export core (`papercut_core.py`):**
 - **Batch / headless (`batch.py`)** — primary for Claude-driven editing of many files. Transcribe a directory, Claude edits the SRTs, export FCP XMLs next to each source. See `EDITING_PROTOCOL.md`.
-- **Browser GUI (`python3 web_gui.py`)** — two-pane interactive editor at localhost:5000.
+- **Browser GUI (`python3 web_gui.py`)** — two-pane interactive editor at localhost:5009 (never 5000; macOS AirPlay occupies it).
 
 ## Architecture
 

@@ -366,7 +366,8 @@ def _seconds_to_srt_time(seconds):
 
 def main():
     parser = argparse.ArgumentParser(description="Web GUI for PaperCut")
-    parser.add_argument("--port", type=int, default=5000, help="Port to run on (default: 5000)")
+    # 5009, not Flask's usual 5000 — macOS AirPlay Receiver squats on 5000.
+    parser.add_argument("--port", type=int, default=5009, help="Port to run on (default: 5009)")
     parser.add_argument("--host", default="127.0.0.1", help="Host to bind to (default: 127.0.0.1)")
     parser.add_argument("--debug", action="store_true", help="Run in debug mode")
     args = parser.parse_args()
