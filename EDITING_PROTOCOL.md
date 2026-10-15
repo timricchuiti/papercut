@@ -225,17 +225,17 @@ Seen on every long recording; the witness diff and the edge scan exist for them:
 - Deletions go to the Trash, never `rm`; original device recordings are never
   touched; nothing is committed or pushed unless Tim asks.
 
-## Screen recordings (DeltaMath): the pause policy
+## Screen recordings (DeltaMath): pauses
 
-DM lessons are screen recordings where the pauses carry on-screen action
-(typing, dropdown selection). Per the 543 edit notes (2026-10): standard export
-first, then `tools/papercut_pausepolicy.py <fcpxml> <json> <audio16k.wav>
---motion <cnt10.npy>`: pure pauses ≤ 2 s are kept whole, longer ones are cut to
-1 s of air with the removed window placed to swallow the most screen motion /
-off-mic sound; gaps that contain cut words (flubs) stay tight unless
-`--override t=air`. The motion profile is a changed-pixel count per 0.1 s from a
-320×180 gray ffmpeg proxy. **Tim's VO reads do NOT get this** — they keep the
-bridge-only cut.
+Tim's rule (2026-10-14): **the tight cut everywhere; longer pauses only between
+problems.** Within a problem the dead air is just dead air, even though the screen
+is being clicked — close it like any VO read. At a problem transition ("Let's try
+another", "Let's try one more": the click to the next problem lands in that pause)
+keep the recorded pause whole with `papercut_setout.py` on the preceding clip (they
+run 2–3 s). The intro → first-problem hand-off has no screen change and stays tight.
+The experimental `tools/papercut_pausepolicy.py` (≤ 2 s kept, longer → 1 s of air
+placed by screen motion from `tools/papercut_motion.py`) was tried on 543 and 738.5
+and withdrawn — don't apply it unless Tim asks for it by name.
 
 ## Reduction is usually high — that's fine
 

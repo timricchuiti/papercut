@@ -17,7 +17,8 @@ timeline offsets** so the spine still tiles; markers travel with their clips.
 | `papercut_dropclips.py <fcpxml> <lo> <hi>` | Drop every clip whose SOURCE start is in [lo, hi] s (noise fragments). **Seconds, not mm:ss** — 19:15 is 1155. |
 | `papercut_moveclips.py <fcpxml> <lo> <hi> <after>` | Move a group of clips to sit after another source time (structural reorder). |
 | `papercut_breaths.py <video> <fcpxml> <extra_s> <t…>` | Widen the pause at chosen boundaries using the source's own room tone. |
-| `papercut_pausepolicy.py <fcpxml> <json> <audio16k.wav> [--motion cnt10.npy] [--keep 2] [--air 1] [--override t=air]` | Screen-recording pause policy (DeltaMath lessons): pure pauses ≤ keep stay whole, longer ones are cut to `air` seconds with the removal placed to swallow screen motion / off-mic sound; flub gaps stay tight. See EDITING_PROTOCOL.md. |
+| `papercut_motion.py <media> <cnt10.npy>` | Screen-motion profile (changed-pixel count per 0.1 s from a 320×180 gray ffmpeg proxy) — input to the pause policy; handy for finding where a click lands in a pause. |
+| `papercut_pausepolicy.py <fcpxml> <json> <audio16k.wav> [--motion cnt10.npy] [--keep 2] [--air 1] [--override t=air]` | Experimental pause policy (pure pauses ≤ keep stay whole, longer ones cut to `air` seconds placed by screen motion). **Withdrawn 2026-10-14** — Tim wants DM lessons tight except between problems; see EDITING_PROTOCOL.md. Kept for reference. |
 | `papercut_cut_audio.py <fcpxml> <media> <out.m4a>` | Render the cut's audio (concat of the kept spans) — result-time cues for animation timing. |
 | `papercut_phrase_cuts.py <cuts.py> [names…]` | Phrase-anchored re-cuts of existing videos from a word list, for sources where amplitude silence detection is unusable. |
 
