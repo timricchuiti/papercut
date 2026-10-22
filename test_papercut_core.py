@@ -7,7 +7,9 @@ import unittest
 
 from papercut_core import (
     resolve_word_edits, snap_to_speech, tokenize_with_cuts, has_cut_markers,
+    drop_slivers,
 )
+from timeline_export import Clip
 
 
 def _words(spec):
@@ -133,6 +135,39 @@ class SnapTests(unittest.TestCase):
         wd = _wd("one:0-1.0")
         r = snap_to_speech([{"start": 0, "end": 1.0}], [(0, 0.9)], wd)
         self.assertEqual(r, [{"start": 0, "end": 1.0}])
+
+
+class SliverTests(unittest.TestCase):
+    # A click at 331.0 inside the pause after a stretched "up." (326.3-338.2), a
+    # real short word "A" that abuts its neighbour, and an isolated real "No." with
+    # its own normally timed word.
+    WD = _wd("up.:326.3-338.2 A:367.8-368.0 single:368.0-370.5 No.:400.0-400.2")
+
+    def _clips(self):
+        return [Clip(320.0, 326.4), Clip(331.03, 331.18), Clip(367.8, 368.0),
+                Clip(368.0, 370.5), Clip(399.95, 400.25), Clip(410.0, 415.0)]
+
+    def test_isolated_click_under_stretched_word_is_dropped(self):
+        kept, gone = drop_slivers(self._clips(), self.WD)
+        self.assertEqual([(c.source_in, c.source_out) for c in gone], [(331.03, 331.18)])
+        self.assertEqual(len(kept), 5)
+
+    def test_abutting_tile_and_worded_short_clip_survive(self):
+        kept, gone = drop_slivers(self._clips(), self.WD)
+        ins = [c.source_in for c in kept]
+        self.assertIn(367.8, ins)      # "A": short but contiguous with the next tile
+        self.assertIn(399.95, ins)     # "No.": short, isolated, but a real word covers it
+
+    def test_disable(self):
+        kept, gone = drop_slivers(self._clips(), self.WD, max_dur=0)
+        self.assertEqual(gone, [])
+        self.assertEqual(len(kept), 6)
+
+    def test_no_whisper_data(self):
+        kept, gone = drop_slivers(self._clips(), None)
+        self.assertEqual(len(gone), 1)  # "No." (0.30 s) is over the length bar anyway
+        kept, gone = drop_slivers(self._clips(), None, max_dur=0.35)
+        self.assertEqual(len(gone), 2)  # now the unprotected "No." goes too
 
 
 if __name__ == "__main__":

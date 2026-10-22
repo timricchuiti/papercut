@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 
 from auto_transcript import transcribe
-from papercut_core import export_from_srt, DEFAULT_MARGIN, SILENCE_BRIDGE_S, EDGE_SNAP_S
+from papercut_core import export_from_srt, DEFAULT_MARGIN, SILENCE_BRIDGE_S, EDGE_SNAP_S, SLIVER_S
 
 
 def open_in_editor(filepath):
@@ -69,6 +69,10 @@ def main():
                         help="Max seconds a kept edge may extend outward to the loud "
                              "edge when the transcriber's word timing clipped a tail "
                              f"or onset; 0 disables (default: {EDGE_SNAP_S})")
+    parser.add_argument("--sliver", type=float, default=SLIVER_S,
+                        help="Drop isolated no-word clips shorter than this many "
+                             "seconds (mouse clicks / transients in long pauses); "
+                             f"0 disables (default: {SLIVER_S})")
     parser.add_argument("--threshold", type=float, default=0.04,
                         help="Silence amplitude threshold (default: 0.04)")
     parser.add_argument("--ffmpeg-args", default=None,
@@ -125,7 +129,7 @@ def main():
         orig_srt=str(orig_srt) if orig_srt.exists() else None,
         export_format=args.export, margin=args.margin, threshold=args.threshold,
         bridge=args.bridge, ffmpeg_args=args.ffmpeg_args, output_path=args.output,
-        snap=args.snap,
+        snap=args.snap, sliver=args.sliver,
     )
 
     src = result.get("source_duration") or 0.0
@@ -134,6 +138,8 @@ def main():
     print(result["message"])
     print(f"  kept {kept:.1f}s of {src:.1f}s ({reduction:.0f}% removed)")
     print(f"  output: {result['output_path']}")
+    for a, b in result.get("slivers_dropped", []):
+        print(f"  sliver dropped: {a:.2f}-{b:.2f}s")
     for w in result.get("warnings", []):
         print(f"  ⚠ WARNING: {w}", file=sys.stderr)
 

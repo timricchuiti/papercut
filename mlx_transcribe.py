@@ -32,6 +32,7 @@ from mlx_whisper.tokenizer import Tokenizer
 # lazily inside its functions, so importing the module here is cheap.)
 from auto_transcript import (
     _group_words_into_segments, _write_transcript_outputs, _make_progress,
+    audit_words,
 )
 
 MODEL_DIR = str(Path(__file__).resolve().parent / "models" / "crisper-mlx-fp16")
@@ -151,9 +152,12 @@ def transcribe_mlx(video_path, language="en", output_dir=None, progress_callback
     if not words:
         raise RuntimeError("MLX produced no words with valid timestamps.")
 
+    # Ghost runs are marked, hallucinations over silence dropped (see
+    # auto_transcript.audit_words); the report is printed and stored in the JSON.
+    words, audit = audit_words(words, video)
     segments = _group_words_into_segments(words)
     json_path, srt_path, orig_srt_path = _write_transcript_outputs(
-        segments, out_dir, stem, progress=_p)
+        segments, out_dir, stem, progress=_p, audit=audit)
     _p(f"Transcription complete ({len(segments)} segments, {len(words)} words).")
     return json_path, srt_path, orig_srt_path
 

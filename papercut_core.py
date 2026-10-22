@@ -356,9 +356,55 @@ def snap_to_speech(ranges, loud_ranges, whisper_data, max_snap=EDGE_SNAP_S):
     return out
 
 
+# Sliver filter (seconds): an isolated clip shorter than this that no normally
+# timed word overlaps is a mouse click / off-mic transient that survived silence
+# detection inside a long pause (every screen recording has a few). 0 disables.
+SLIVER_S = 0.25
+SLIVER_GAP_S = 0.05      # "isolated" = not source-contiguous with a neighbour
+SLIVER_WORD_MAX_S = 1.0  # longer words are pause-stretched tails, not evidence
+
+
+def drop_slivers(clips, whisper_data, max_dur=SLIVER_S, gap=SLIVER_GAP_S,
+                 word_max=SLIVER_WORD_MAX_S):
+    """Drop isolated no-speech slivers from a clip list.
+
+    A clip goes when ALL hold: shorter than `max_dur`; a source gap > `gap` to
+    both its neighbours (a short tile that abuts a neighbour is a real word's
+    boundary, not a sliver); and no word of duration < `word_max` overlaps it.
+    Pause-stretched words (a last word timed across the following silence) are
+    ignored as evidence, since they are exactly what covers these transients.
+    Returns (kept_clips, dropped_clips).
+    """
+    if max_dur <= 0 or not clips:
+        return clips, []
+    words = []
+    for seg in (whisper_data or {}).get("segments", []):
+        for w in seg.get("words", []):
+            try:
+                a, b = float(w["start"]), float(w["end"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if 0 < b - a < word_max:
+                words.append((a, b))
+    words.sort()
+    kept, dropped = [], []
+    for i, c in enumerate(clips):
+        if c.duration >= max_dur:
+            kept.append(c); continue
+        prev_gap = c.source_in - clips[i - 1].source_out if i > 0 else float("inf")
+        next_gap = clips[i + 1].source_in - c.source_out if i + 1 < len(clips) else float("inf")
+        if prev_gap <= gap or next_gap <= gap:
+            kept.append(c); continue
+        if any(a < c.source_out and b > c.source_in for a, b in words):
+            kept.append(c); continue
+        dropped.append(c)
+    return kept, dropped
+
+
 def build_clips(video, ordered_blocks, whisper_data, margin=DEFAULT_MARGIN,
                 threshold=DEFAULT_THRESHOLD, bridge=SILENCE_BRIDGE_S,
-                media_info=None, warnings=None, snap=EDGE_SNAP_S):
+                media_info=None, warnings=None, snap=EDGE_SNAP_S,
+                sliver=SLIVER_S, dropped=None):
     """Resolve edits + silence-detect + build the final clip list.
 
     `margin` (seconds) controls only how tight the kept edges are: > 0 pads each clip
@@ -371,6 +417,8 @@ def build_clips(video, ordered_blocks, whisper_data, margin=DEFAULT_MARGIN,
     `snap` (seconds) caps how far a kept edge may move outward to the loud edge
     (see snap_to_speech); 0 disables snapping.
     `warnings`: optional list for marker-placement failures (see resolve_word_edits).
+    `sliver` (seconds): drop isolated no-word clips shorter than this (see
+    drop_slivers); 0 disables. `dropped`: optional list that receives them.
     """
     video = Path(video)
     if media_info is None:
@@ -394,6 +442,10 @@ def build_clips(video, ordered_blocks, whisper_data, margin=DEFAULT_MARGIN,
                                      max_snap=snap)
 
     clips = build_clip_list(resolved_blocks, kept_ranges)
+    # 4. Slivers: isolated click/transient fragments inside long pauses.
+    clips, gone = drop_slivers(clips, whisper_data, max_dur=sliver)
+    if dropped is not None:
+        dropped.extend(gone)
     if not clips:
         raise ValueError("No audio detected in kept blocks — nothing to export.")
     return clips, media_info
@@ -444,7 +496,7 @@ def export_from_blocks(video, ordered_blocks, whisper_data=None,
                        export_format="final-cut-pro", margin=DEFAULT_MARGIN,
                        threshold=DEFAULT_THRESHOLD, bridge=SILENCE_BRIDGE_S,
                        edit_method="", ffmpeg_args=None, output_path=None,
-                       export_folder=None, snap=EDGE_SNAP_S):
+                       export_folder=None, snap=EDGE_SNAP_S, sliver=SLIVER_S):
     """High-level export from a list of ordered blocks (the GUI's data shape).
 
     Args:
@@ -456,6 +508,7 @@ def export_from_blocks(video, ordered_blocks, whisper_data=None,
         threshold: Silence amplitude threshold (overridden by edit_method if set).
         bridge: Keep silent gaps up to ~2*bridge seconds inside speech (defrag knob).
         snap: Max seconds a kept edge may extend to the loud edge (0 = off).
+        sliver: Drop isolated no-word clips shorter than this many seconds (0 = off).
         edit_method: e.g. "audio:threshold=0.04" — parsed for threshold.
         ffmpeg_args: Extra args for the "video" format.
         output_path: Explicit output path (else derived).
@@ -486,10 +539,11 @@ def export_from_blocks(video, ordered_blocks, whisper_data=None,
             block["originalText"] = extract_flags(block["originalText"])[0]
 
     # Collect [[CUT]]-placement warnings while resolving edits.
-    warnings = []
+    warnings, slivers = [], []
     clips, media_info = build_clips(video, ordered_blocks, whisper_data,
                                     margin=margin, threshold=threshold,
-                                    bridge=bridge, warnings=warnings, snap=snap)
+                                    bridge=bridge, warnings=warnings, snap=snap,
+                                    sliver=sliver, dropped=slivers)
 
     if output_path is None:
         output_path = resolve_output_path(video, export_format, export_folder)
@@ -507,6 +561,7 @@ def export_from_blocks(video, ordered_blocks, whisper_data=None,
     total_dur = sum(c.duration for c in clips)
     source_dur = media_info.get("duration", 0.0)
     marker_note = f", {len(flags)} flag marker(s)" if flags else ""
+    sliver_note = f", {len(slivers)} sliver(s) dropped" if slivers else ""
     return {
         "success": True,
         "output_path": str(output_path),
@@ -515,8 +570,9 @@ def export_from_blocks(video, ordered_blocks, whisper_data=None,
         "source_duration": source_dur,
         "flag_count": len(flags),
         "warnings": warnings,
+        "slivers_dropped": [(c.source_in, c.source_out) for c in slivers],
         "message": f"Export completed: {Path(output_path).name} "
-                   f"({len(clips)} clips, {total_dur:.1f}s{marker_note})",
+                   f"({len(clips)} clips, {total_dur:.1f}s{marker_note}{sliver_note})",
     }
 
 
@@ -566,7 +622,7 @@ def export_from_srt(video, edited_srt, whisper_json=None, orig_srt=None,
                     export_format="final-cut-pro", margin=DEFAULT_MARGIN,
                     threshold=DEFAULT_THRESHOLD, bridge=SILENCE_BRIDGE_S,
                     ffmpeg_args=None, output_path=None, export_folder=None,
-                    snap=EDGE_SNAP_S):
+                    snap=EDGE_SNAP_S, sliver=SLIVER_S):
     """Headless export: edited SRT (+ original + JSON) -> output file.
 
     This is the CLI twin of the GUI export. Deleted SRT blocks are dropped;
@@ -599,5 +655,5 @@ def export_from_srt(video, edited_srt, whisper_json=None, orig_srt=None,
         video, ordered_blocks, whisper_data=whisper_data,
         export_format=export_format, margin=margin, threshold=threshold,
         bridge=bridge, ffmpeg_args=ffmpeg_args, output_path=output_path,
-        export_folder=export_folder, snap=snap,
+        export_folder=export_folder, snap=snap, sliver=sliver,
     )

@@ -37,6 +37,7 @@ On export:
 | `timeline_export.py` | `Clip` dataclass, `build_clip_list()`, `generate_fcpxml()`, `generate_premiere_xml()`, `export_video()` |
 | `transcript_diff.py` | SRT parser, WhisperX JSON loader, deleted range detection |
 | `auto_transcript.py` | Engine dispatcher — `mlx` (default, shells out to `mlx_transcribe.py`), `crisperwhisper` (in-process transformers), `whisperx` |
+| `auto_transcript.py` → `audit_words()` | Post-decode audit shared by the verbatim engines: zero-width ghost runs marked (`"ghost": true`), words decoded over room tone dropped, quiet words listed; report printed + stored under `"audit"` in the JSON. |
 | `mlx_transcribe.py` | **MLX engine** (default) — runs CrisperWhisper weights via Apple MLX, ~15-30x faster; sets alignment heads + CrisperWhisper word-grouping. Runs under `.venv-mlx`. |
 | `setup_mlx.sh` | One-time MLX setup: build `.venv-mlx`, convert CrisperWhisper → MLX fp16 at `models/` |
 | `main.py` | Single-file CLI (transcribe / edit / export via `papercut_core`) |
@@ -89,6 +90,7 @@ python3 web_gui.py --port 5009
   - `--margin` (default **0.07**, Tim's preference) — edge tightness ONLY, applied once in `silence.apply_margin`. `>0` breath, `0` at the speech, `<0` erodes tighter. `build_clip_list` adds NO margin of its own.
   - `--bridge` (default 0.20) — keep silent gaps up to ~2× this inside speech (morphological close) so sentences don't fragment; longer pauses get cut.
   - `--snap` (default 0.5) — after silence detection, a kept edge still inside loud audio moves out to the loud edge, bounded by the neighbouring source word (`snap_to_speech`). Repairs MLX's early word-ends / late word-starts; `0` disables.
+  - `--sliver` (default **0.25**) — after silence detection, an isolated clip shorter than this that no normally timed word overlaps is dropped (mouse clicks / transients inside long pauses); `0` disables. Short tiles that abut a neighbour and short real words are kept.
 - **`[[CUT]]` placement** (`resolve_word_edits`): positional when the block's token count matches its words; otherwise aligned by text (difflib) — ghost words on a block boundary used to make the block silently keep whole. Still unplaceable → block kept WHOLE + warning, never a fuzzy cut. An unclosed `[[CUT]]` carries across blocks until `[[/CUT]]`.
 - The project name is the OUTPUT file's stem, so several cuts of one source import as distinct FCP projects.
 - **`[[FLAG: note]]`** in an SRT block → FCPXML `<marker>` on the containing clip (stripped before word matching). See `EDITING_PROTOCOL.md`.

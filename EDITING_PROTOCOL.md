@@ -40,6 +40,23 @@ single-file in a fresh subprocess — `--in-process` batch mode has stalled.
 Beware its chunk-overlap artifact: phantom doubled phrases with REWOUND
 timestamps are the runtime stitching, not real re-takes.
 
+**The transcriber audits itself** (2026-10-20): after decoding, the verbatim
+engines run `auto_transcript.audit_words` against the media's waveform and print
+an **Audit:** block (also stored under `"audit"` in the JSON):
+- *ghost runs* — zero-width words, kept and marked `"ghost": true`. Sometimes a
+  loop of earlier words, sometimes real speech squashed to a point ("at x equals
+  eight" was one): check the waveform, cut the text if it's a loop.
+- *dropped* — words decoded over room tone (peak RMS < 0.0015: "The.", "Okay.",
+  "hm-hmm"), removed from the SRT. A dropped RUN of three or more words is
+  usually a real phrase timed into a silence; its audio is elsewhere, and
+  `papercut_uncovered.py` finds it. Muttered asides sit just above the bar
+  (~0.002) and are kept on purpose — never raise it.
+- *quiet* — kept words under 0.01 peak, listed for review (mutters, faint
+  hallucinations over breath). The editor decides.
+Before editing, also run `tools/papercut_uncovered.py <json> <media>`: audio the
+words don't cover is a missed phrase (restore / flag) or non-speech (leave it to
+silence detection, or cut it).
+
 Run everything under the CrisperWhisper venv: `.venv-crisper/bin/python …`
 (transcription shells out to `.venv-mlx` automatically for the default engine).
 
@@ -56,6 +73,11 @@ Run everything under the CrisperWhisper venv: `.venv-crisper/bin/python …`
   transcriber's early word-ENDs / late word-STARTs ("ninety thousan-",
   "-urthermore") without pulling a cut take back in. It cannot recover words MLX
   never emitted (ghost loops) — those still need `papercut_setout.py` by hand.
+- **sliver** — after silence detection, an isolated clip shorter than this
+  (default 0.25 s) that no normally timed word overlaps is dropped: mouse clicks
+  and off-mic transients that survive inside long pauses. Short tiles that abut
+  a neighbour, and short real words, are untouched. The export message counts
+  the drops; `--sliver 0` disables.
 
 Output `<stem>_ALTERED.fcpxml` + `<stem>.notes.md` next to the source `.mp4`,
 referencing the original. Leave `<stem>.srt.orig` untouched (diff baseline).
@@ -201,7 +223,8 @@ Seen on every long recording; the witness diff and the edge scan exist for them:
   exporter can't place what MLX never emitted, so restore the span by hand with
   `papercut_setout.py` and drop a `[[FLAG]]`.
 - **Hallucinations over silence** — "Okay.", "The.", stray sentences in a long
-  pause. Both engines + the waveform decide; the witness diff shows them.
+  pause. The transcriber's audit now drops the ones over room tone and lists the
+  quiet ones; both engines + the waveform decide the rest.
 - **Early word ends / late word starts** — a few hundred ms; `snap` repairs most,
   the edge scan shows the rest.
 - **Mis-timed words placed in silence** — a word stamped a second early lands on
@@ -220,6 +243,11 @@ Seen on every long recording; the witness diff and the edge scan exist for them:
   any variant SRTs and `<stem>.notes.md` go to `~/Movies/PM/sidecars/` — never
   left in Capture. Several cuts of one source get distinct output names
   (`<stem>_ALTERED`, `<stem>_SHORT_ALTERED`); the project name follows the file.
+  **Export straight to the final filename** (`--output <final path>`): the FCP
+  project is named after the output stem at export time, so a file exported to a
+  scratch name and copied carries the scratch name inside and collides on import
+  (that broke a sub-3 import on 2026-10-20). If a rename is unavoidable, fix
+  `<project name="…">` in the XML too.
 - **DeltaMath lessons** (`~/Movies/DM/<project>/<stem>PC.mp4`): processed in
   place — FCPXML, notes, sidecars and witness copies all stay in the folder.
 - Deletions go to the Trash, never `rm`; original device recordings are never
@@ -233,6 +261,11 @@ is being clicked — close it like any VO read. At a problem transition ("Let's 
 another", "Let's try one more": the click to the next problem lands in that pause)
 keep the recorded pause whole with `papercut_setout.py` on the preceding clip (they
 run 2–3 s). The intro → first-problem hand-off has no screen change and stays tight.
+When the recorded pause is long (8–20 s on 668: Tim submits, reads, scrolls,
+sometimes opens Show Examples) don't keep it whole — keep ~0.5 s after the last
+line with `setout`, then the screen change itself as its own clip with
+`papercut_addclip.py` (2.5–3 s; `papercut_motion.py` shows where the page
+changes; grab a frame either side to confirm it's the next problem, not a popup).
 The experimental `tools/papercut_pausepolicy.py` (≤ 2 s kept, longer → 1 s of air
 placed by screen motion from `tools/papercut_motion.py`) was tried on 543 and 738.5
 and withdrawn — don't apply it unless Tim asks for it by name.

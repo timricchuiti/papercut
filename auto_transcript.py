@@ -54,7 +54,105 @@ def _make_progress(progress_callback):
     return _progress
 
 
-def _write_transcript_outputs(segments, out_dir, stem, progress=print):
+def _rms_profile(media_path, hop_s=0.05, sample_rate=16000):
+    """RMS per `hop_s` window of the media's mono audio (ffmpeg -> numpy)."""
+    import numpy as np
+    cmd = ["ffmpeg", "-v", "error", "-i", str(media_path), "-vn", "-ac", "1",
+           "-ar", str(sample_rate), "-f", "s16le", "pipe:1"]
+    raw = subprocess.run(cmd, capture_output=True, timeout=900).stdout
+    x = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+    n = int(sample_rate * hop_s)
+    m = len(x) // n
+    if m == 0:
+        return np.zeros(0, dtype=np.float32), hop_s
+    return np.sqrt((x[:m * n].reshape(m, n) ** 2).mean(1)), hop_s
+
+
+# A word whose span (± AUDIT_SLACK_S) never rises above this RMS (16 kHz mono,
+# 50 ms windows) was decoded over room tone — a hallucination ("The.", "Okay.",
+# "hm-hmm") or a phrase timed into a silence. Calibrated on four recordings
+# (2026-10-20): room tone peaks at 0.0004-0.0011, normal speech at 0.1-0.25, and
+# muttered under-the-breath speech as low as 0.0018 — so the bar sits just above
+# room tone and must stay there; it must never catch quiet real speech. Words
+# between the bar and AUDIT_QUIET_RMS are kept but listed as "quiet" for review.
+AUDIT_SILENT_RMS = 0.0015
+AUDIT_QUIET_RMS = 0.01
+AUDIT_SLACK_S = 0.1
+
+
+def audit_words(words, media_path, silent_rms=AUDIT_SILENT_RMS, slack_s=AUDIT_SLACK_S,
+                quiet_rms=AUDIT_QUIET_RMS):
+    """Post-pass over a verbatim transcriber's word list for its two known failures.
+
+    - **Ghosts**: zero-width words (start == end) where the decoder stalled. The
+      text is sometimes a loop of earlier words and sometimes real speech squashed
+      to a point, so they are KEPT, marked ``"ghost": True`` and reported.
+    - **Silence hallucinations**: words of real width whose span (± slack) holds
+      no audio above ``silent_rms`` — DROPPED from the transcript and reported.
+      Pause-stretched words are safe: the span includes the spoken part. A run
+      of several consecutive dropped words is usually a REAL phrase the decoder
+      timed into a silence (the audio is elsewhere; papercut_uncovered.py finds
+      it), so the report says so.
+    - **Quiet words**: kept, but listed when the peak is under ``quiet_rms`` —
+      muttered asides and faint hallucinations live there; the editor decides.
+
+    Returns (kept_words, audit) where audit = {"ghost_runs": [...],
+    "dropped_silent": [...], "quiet": [...], "silent_rms": float}. Audio problems
+    (no ffmpeg, unreadable media) disable the silence check rather than failing.
+    """
+    try:
+        rms, hop = _rms_profile(media_path)
+    except Exception as e:                                  # noqa: BLE001
+        print(f"  audit: RMS profile unavailable ({e}); silence check skipped",
+              file=sys.stderr)
+        rms, hop = None, 0.05
+
+    kept, dropped, ghost_runs, quiet = [], [], [], []
+    run = None
+    for w in words:
+        if w["end"] <= w["start"]:
+            w["ghost"] = True
+            if run is None or run["start"] != w["start"]:
+                run = {"start": w["start"], "text": w["word"], "count": 1}
+                ghost_runs.append(run)
+            else:
+                run["text"] += " " + w["word"]
+                run["count"] += 1
+            kept.append(w)
+            continue
+        run = None
+        if rms is not None and len(rms):
+            i0 = max(0, int((w["start"] - slack_s) / hop))
+            i1 = min(len(rms), int((w["end"] + slack_s) / hop) + 1)
+            peak = float(rms[i0:i1].max()) if i1 > i0 else 0.0
+            if peak < silent_rms:
+                dropped.append({"start": w["start"], "end": w["end"],
+                                "word": w["word"], "peak_rms": round(peak, 4)})
+                continue
+            if peak < quiet_rms:
+                quiet.append({"start": w["start"], "end": w["end"],
+                              "word": w["word"], "peak_rms": round(peak, 4)})
+        kept.append(w)
+    return kept, {"ghost_runs": ghost_runs, "dropped_silent": dropped, "quiet": quiet,
+                  "silent_rms": silent_rms, "quiet_rms": quiet_rms}
+
+
+def _runs(items, max_gap=0.05):
+    """Group consecutive audit entries (end of one ~ start of next) into runs."""
+    runs = []
+    for it in items:
+        if runs and it["start"] - runs[-1]["end"] <= max_gap:
+            runs[-1]["end"] = it["end"]; runs[-1]["words"].append(it)
+        else:
+            runs.append({"start": it["start"], "end": it["end"], "words": [it]})
+    return runs
+
+
+def _fmt_t(t):
+    return f"{int(t // 60)}:{t % 60:05.2f}"
+
+
+def _write_transcript_outputs(segments, out_dir, stem, progress=print, audit=None):
     """Write {stem}.json / .srt / .srt.orig from WhisperX-style segments.
 
     Shared by the CrisperWhisper and MLX engines so their on-disk output is
@@ -62,8 +160,11 @@ def _write_transcript_outputs(segments, out_dir, stem, progress=print):
     """
     out_dir = Path(out_dir)
     json_path = out_dir / f"{stem}.json"
+    payload = {"segments": segments}
+    if audit is not None:
+        payload["audit"] = audit
     with open(json_path, "w", encoding="utf-8") as f:
-        json.dump({"segments": segments}, f, indent=2, ensure_ascii=False)
+        json.dump(payload, f, indent=2, ensure_ascii=False)
 
     srt_text = "".join(
         f"{i}\n{_seconds_to_srt_time(seg['start'])} --> "
@@ -79,6 +180,22 @@ def _write_transcript_outputs(segments, out_dir, stem, progress=print):
     progress(f"  JSON (timestamps): {json_path}")
     progress(f"  SRT (editable):    {srt_path}")
     progress(f"  SRT (original):    {orig_srt_path}")
+    if audit is not None:
+        ghosts, dropped, quiet = audit["ghost_runs"], audit["dropped_silent"], audit.get("quiet", [])
+        progress(f"Audit: {len(ghosts)} ghost run(s) kept + marked, "
+                 f"{len(dropped)} silent word(s) dropped, {len(quiet)} quiet word(s) to check")
+        for r in ghosts:
+            progress(f"  ghost   {_fmt_t(r['start'])}  {r['text']!r}")
+        for r in _runs(dropped):
+            text = " ".join(w["word"] for w in r["words"])
+            peak = max(w["peak_rms"] for w in r["words"])
+            note = ("  <- a run: probably real speech timed into a silence; "
+                    "find the audio with papercut_uncovered.py" if len(r["words"]) >= 3 else "")
+            progress(f"  dropped {_fmt_t(r['start'])}-{_fmt_t(r['end'])}  {text!r} (peak rms {peak}){note}")
+        for r in _runs(quiet):
+            text = " ".join(w["word"] for w in r["words"])
+            peak = max(w["peak_rms"] for w in r["words"])
+            progress(f"  quiet   {_fmt_t(r['start'])}-{_fmt_t(r['end'])}  {text!r} (peak rms {peak})")
     return json_path, srt_path, orig_srt_path
 
 
@@ -376,10 +493,11 @@ def transcribe_crisper(video_path, language="en", output_dir=None,
     if not words:
         raise RuntimeError("CrisperWhisper produced no words with valid timestamps.")
 
+    words, audit = audit_words(words, video)
     # Group words into segments by pause gaps (>1s) or every ~30 words
     segments = _group_words_into_segments(words)
     json_path, srt_path, orig_srt_path = _write_transcript_outputs(
-        segments, out_dir, stem, progress=_progress)
+        segments, out_dir, stem, progress=_progress, audit=audit)
     _progress(f"Transcription complete ({len(segments)} segments, {len(words)} words).")
 
     return json_path, srt_path, orig_srt_path
