@@ -7,7 +7,7 @@ nearest to t gets its out-point extended by extra_seconds (if that source region
 (speech follows in the source, e.g. a cut take), the NEXT clip's in-point is moved earlier instead.
 Offsets are re-accumulated so the spine still tiles. Prints what it did.
 """
-import sys, re, os, numpy as np
+import sys, re, os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))  # repo root: silence.py
 import silence
 video, xml_path, extra = sys.argv[1], sys.argv[2], float(sys.argv[3]); ts = [float(t) for t in sys.argv[4:]]

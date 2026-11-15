@@ -246,7 +246,7 @@ def _transcribe_whisperx(video_path, model="medium", language="en", output_dir=N
     orig_srt_path = out_dir / f"{stem}.srt.orig"
     shutil.copy2(srt_path, orig_srt_path)
 
-    print(f"\nGenerated files:")
+    print("\nGenerated files:")
     print(f"  JSON (timestamps): {json_path}")
     print(f"  SRT (editable):    {srt_path}")
     print(f"  SRT (original):    {orig_srt_path}")

@@ -2,7 +2,6 @@
 """Silence detection via ffmpeg + numpy. Replaces auto-editor's audio analysis."""
 
 import subprocess
-import sys
 
 import numpy as np
 

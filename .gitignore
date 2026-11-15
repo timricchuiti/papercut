@@ -7,3 +7,4 @@ papercuticon.pxd
 .claude/scheduled_tasks.lock
 .venv-mlx/
 models/
+.DS_Store

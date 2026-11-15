@@ -7,7 +7,6 @@ import os
 import shutil
 import subprocess
 import tempfile
-import time
 from pathlib import Path
 
 from flask import Flask, Response, jsonify, request, send_file, send_from_directory
@@ -64,7 +63,7 @@ def get_engines():
     # Check CrisperWhisper — probe for torch + transformers
     crisper_ok = True
     try:
-        import torch  # noqa: F811
+        import torch  # noqa: F401
     except ImportError:
         crisper_ok = False
         engines["crisperwhisper"]["reason"] = (
@@ -72,7 +71,7 @@ def get_engines():
         )
     if crisper_ok:
         try:
-            import transformers  # noqa: F811
+            import transformers  # noqa: F401
         except ImportError as e:
             msg = str(e)
             # Version mismatch from the CrisperWhisper fork (e.g. tokenizers range) is OK

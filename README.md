@@ -1,159 +1,141 @@
 # PaperCut
 
-> **A wrapper for [auto-editor](https://github.com/WyattBlue/auto-editor) that enables transcript-based video editing.**
+Transcript-based editing for video and audio. Transcribe a recording **verbatim**
+(fillers, stutters and false starts kept, because those are what gets cut), mark
+the cuts as text, and export a non-destructive cut list for Final Cut Pro or
+Premiere, or a re-encoded file. Silence between the kept words is removed
+automatically; the transcript edits and the silence cuts compose into one clip
+list that references the original media.
 
-PaperCut extends `auto-editor` with a "Descript-like" workflow. Generate a transcript using **WhisperX**, delete unwanted text blocks, and automatically cut those sections from your video — all while preserving `auto-editor`'s silence and motion detection.
-
----
-
-## Features
-
-* **Hybrid Editing:** Combine automated silence removal with manual, text-based editorial choices.
-* **WhisperX Integration:** Generates highly accurate, word-level timestamps using [WhisperX](https://github.com/m-bain/whisperx).
-* **Web GUI:** Browser-based editor with two-column transcript view, video sync, and one-click export.
-* **Auto-Edit Tools:** Clean filler words and deduplicate repeated takes automatically.
-* **NLE Ready:** Exports to **FCPXML** (Final Cut Pro), **Premiere XML**, **DaVinci Resolve**, or standard video files.
-* **CLI Pipeline:** Every step also works from the command line for scripting and automation.
-* **Safe & Non-Destructive:** Uses WhisperX JSON as the timing source of truth — editing the transcript can't corrupt timestamps.
+Default engine: **CrisperWhisper running on Apple MLX** (`mlx_transcribe.py`),
+15–30× faster than the transformers path with the same verbatim words and
+word-accurate timestamps. WhisperX is the text witness for the two-pass check
+and the non-verbatim fallback. No auto-editor dependency.
 
 ---
 
-## Quick Start (Web GUI)
-
-The web interface handles transcription, editing, and export in one place.
+## Setup (macOS, Apple silicon)
 
 ```bash
-pip install -r requirements.txt
-python3 web_gui.py
+brew install ffmpeg
+./setup_mlx.sh                      # builds .venv-mlx and converts CrisperWhisper → MLX fp16 (~3 GB, once)
+
+/opt/homebrew/bin/python3.12 -m venv .venv-crisper     # export/CLI venv
+.venv-crisper/bin/python -m pip install torch torchaudio accelerate safetensors librosa soundfile numpy
+.venv-crisper/bin/python -m pip install "git+https://github.com/nyrahealth/transformers.git@crisper_whisper"
+
+pipx install whisperx               # optional: witness / fallback engine
 ```
 
-Open **http://localhost:5009** in your browser, then:
-
-1. **Drop a video** (or paste a local path) — WhisperX transcribes it automatically
-2. **Edit the transcript** — delete blocks, edit text, or use the auto-edit tools:
-   - **Clean Fillers** removes blocks that are entirely filler words (um, uh, etc.)
-   - **Dedupe Takes** finds consecutive similar blocks and keeps only the last
-3. **Export** — choose your format and margin, click Export
-
-All edits support undo/redo (Ctrl+Z / Ctrl+Shift+Z), auto-save to localStorage, and keyboard navigation (arrow keys, Delete, Ctrl+F to search).
+`batch.py` and `main.py` run under `.venv-crisper`; transcription shells out to
+`.venv-mlx` for the default engine. Do not `pip install mlx-whisper` (the pinned
+mlx-examples commit is required; see `setup_mlx.sh`). The browser GUI uses the
+system `python3` with Flask (`pip install flask`).
 
 ---
 
-## CLI Usage
+## Workflow
 
-The same pipeline is available as standalone scripts for automation or integration into other workflows.
-
-### 1. Generate the Transcript
+### 1. Transcribe
 
 ```bash
-python3 auto_transcript.py my_video.mp4
+P=.venv-crisper/bin/python
+$P main.py video.mp4 --transcribe-only --output-dir out/          # MLX (default)
+$P main.py video.mp4 --transcribe-only --engine whisperx --model large-v3 --output-dir wx/   # witness
+$P batch.py transcribe <dir>                                        # every media file in a directory
 ```
 
-Output: `my_video.json` (word-level timing) and `my_video.srt` (editable transcript). A backup `my_video.srt.orig` is also created.
+Produces `<stem>.json` (word timings, the source of truth), `<stem>.srt`
+(editable) and `<stem>.srt.orig` (untouched copy). The transcriber audits
+itself: zero-width ghost words are marked, words decoded over room tone are
+dropped, quiet words are listed.
 
-### 2. Edit the Transcript
+### 2. Edit the SRT
 
-Open `my_video.srt` in any text editor. Delete entire blocks (index + timestamp + text) for sections you want to remove.
+Wrap the words to remove in `[[CUT]] … [[/CUT]]`; a span may run across
+blocks. Never change the spelling of a word that stays — a changed word is
+treated as a cut. Keep the LAST take of a repeat. `[[FLAG: note]]` in a block
+becomes a marker on the exported clip. Full rules: `EDITING_PROTOCOL.md`.
 
-**Before editing:**
 ```srt
-1
-00:00:00,000 --> 00:00:02,100
-Hey everyone, welcome back to the channel.
-
 2
-00:00:02,150 --> 00:00:04,800
-Um, so today we're going to talk about...
-
-3
-00:00:05,210 --> 00:00:07,420
-So today we're going to talk about editing.
+00:00:02,150 --> 00:00:07,420
+[[CUT]]So today we're going to[[/CUT]] so today we're going to talk about editing.
 ```
 
-**After editing (block 2 deleted):**
-```srt
-1
-00:00:00,000 --> 00:00:02,100
-Hey everyone, welcome back to the channel.
-
-3
-00:00:05,210 --> 00:00:07,420
-So today we're going to talk about editing.
-```
-
-### 3. Apply Cuts and Export
+### 3. Export
 
 ```bash
-python3 main.py my_video.mp4 \
-  --transcript my_video.srt \
-  --whisper-json my_video.json \
-  --margin 0.25 \
-  --export final-cut-pro
+$P main.py video.mp4 --export final-cut-pro \
+   --transcript out/video.srt --original-srt out/video.srt.orig \
+   --whisper-json out/video.json --output cuts/video_ALTERED.fcpxml
+$P batch.py export <dir>          # FCPXML next to each edited source
+$P batch.py status <dir>          # transcribed / edited / exported per file
 ```
 
-Cut knobs: `--margin` (edge breath, default 0.07), `--bridge` (keep micro-pauses up
-to ~2× this, default 0.20), `--snap` (let a kept edge extend to the end of the
-actual speech when the transcriber's word timing clipped it, max seconds, default
-0.5). Several cuts of one source? Give each `--output` a different name — the
-project is named after the output file.
+The FCP project is named after the **output** file's stem, so several cuts of
+one source import as distinct projects. Formats: `final-cut-pro`, `resolve`,
+`premiere`, `video` (ffmpeg re-encode).
+
+Cut knobs (defaults are the tuned ones; change them only on request):
+
+| Flag | Default | Does |
+|---|---|---|
+| `--margin` | 0.07 | edge breath around kept speech, applied once; negative erodes tighter |
+| `--bridge` | 0.20 | silent gaps up to ~2× this inside speech are kept so sentences don't fragment |
+| `--snap` | 0.5 | a kept edge still inside loud audio moves out to the loud edge (max seconds) |
+| `--sliver` | 0.25 | isolated no-word clips shorter than this (clicks, transients) are dropped |
+| `--threshold` | 0.04 | silence amplitude threshold |
+
+### 4. Verify
+
+`tools/` holds the post-export helpers (witness diff, uncovered-audio scan,
+word dump, clip list, edge scan, setin/setout/dropclips/addclip/moveclips,
+breaths, RMS profile, cut audio/AV render, audio-delay sync variant). See
+`tools/README.md`.
+
+### Browser GUI
+
+```bash
+python3 web_gui.py --port 5009
+```
+
+Two-pane editor (original | edit) with cut/restore, drag reorder, Free Edit
+mode, auto-edit tools, undo/redo and export presets. Never port 5000 (macOS
+AirPlay).
 
 ---
 
-## Installation
-
-**Prerequisites:**
-* Python 3.8+
-* [FFmpeg](https://ffmpeg.org/download.html)
-* [WhisperX](https://github.com/m-bain/whisperx) (requires Python 3.12 on some systems)
-
-**Setup:**
+## Tests
 
 ```bash
-git clone https://github.com/timricchuiti/papercut.git
-cd papercut
-pip install -r requirements.txt
+.venv-crisper/bin/python -m unittest test_papercut_core
 ```
 
 ---
 
-## Project Structure
+## Layout
 
 ```
 papercut/
-├── web_gui.py             # Web GUI server (primary interface)
-├── auto_transcript.py     # WhisperX transcription wrapper
-├── transcript_diff.py     # Diff engine — detects deleted blocks
-├── main.py                # CLI orchestrator (full pipeline)
-├── papercut_core.py       # Shared export core (cut placement, silence, snap)
-├── tools/                 # Post-export helpers: edge scan, clip list, setin/setout, pause policy …
-├── test_papercut_core.py  # Unit tests for cut placement
-├── static/
-│   └── index.html         # Web GUI frontend (single-file HTML/CSS/JS)
-└── requirements.txt
+├── main.py                single-file CLI (transcribe / export)
+├── batch.py               headless driver over a directory
+├── papercut_core.py       shared export core: cut placement, silence, snap, sliver
+├── auto_transcript.py     engine dispatcher (mlx / crisperwhisper / whisperx) + audit
+├── mlx_transcribe.py      MLX engine (runs under .venv-mlx)
+├── silence.py             silence detection, margin, bridging
+├── timeline_export.py     clip list, FCPXML / Premiere XML / ffmpeg export
+├── transcript_diff.py     SRT parser, word JSON loader
+├── web_gui.py + static/   browser editor
+├── tools/                 post-export + verification helpers
+├── setup_mlx.sh           one-time MLX engine setup
+├── EDITING_PROTOCOL.md    how the SRT is edited
+├── PRD.md                 design document
+└── CLAUDE.md              working notes for the agent
 ```
-
----
-
-## Troubleshooting
-
-**Q: The cuts aren't appearing in my video**
-- Make sure you're deleting the entire block (all 3–4 lines including the blank line)
-- Verify the JSON file matches your video file
-
-**Q: Audio sounds choppy**
-- Try increasing the margin value (e.g., `--margin 0.5`)
-
-**Q: WhisperX isn't installing**
-- WhisperX may require Python 3.12: `pip install whisperx` with the correct Python version
-- See the [WhisperX installation guide](https://github.com/m-bain/whisperx#setup)
-
----
 
 ## License
 
-**MIT License**
-
-This project wraps and builds upon:
-
-* [WyattBlue/auto-editor](https://github.com/WyattBlue/auto-editor) (MIT)
-* [m-bain/whisperx](https://github.com/m-bain/whisperx) (BSD-2-Clause)
+MIT. Builds on [nyrahealth/CrisperWhisper](https://github.com/nyrahealth/CrisperWhisper),
+[ml-explore/mlx-examples](https://github.com/ml-explore/mlx-examples) (whisper) and
+[m-bain/whisperx](https://github.com/m-bain/whisperx).

@@ -14,7 +14,6 @@ Usage:
 
 This is the deterministic half of the P3b rough_animate runner (docs/pipeline-app-plan).
 """
-import re
 import subprocess
 import sys
 import tempfile

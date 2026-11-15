@@ -7,7 +7,6 @@ Replaces auto-editor's export functionality with support for reordered clips.
 import json
 import re
 import subprocess
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from xml.sax.saxutils import escape as xml_escape
@@ -376,8 +375,6 @@ def generate_premiere_xml(media_path, clips, media_info, project_name=None):
     duration_frames = round(media_info["duration"] * fr)
     has_video = media_info["has_video"]
     has_audio = media_info["has_audio"]
-    w = media_info.get("width") or 1920
-    h = media_info.get("height") or 1080
     timebase = round(fr)
 
     # Build clip items

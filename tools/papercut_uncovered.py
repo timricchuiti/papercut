@@ -7,7 +7,7 @@ silence, a missed sentence) — or non-speech (a cough, a burst of taps). Check 
 against the WhisperX witness and the waveform before editing; a real phrase can be
 left in a kept block, restored with papercut_setout.py / papercut_addclip.py, and
 flagged. Prints: source span, length, covered seconds, nearest transcript words."""
-import sys, json, subprocess, argparse
+import json, subprocess, argparse
 import numpy as np
 
 ap = argparse.ArgumentParser()
@@ -17,7 +17,7 @@ ap.add_argument("--min", type=float, default=0.3, help="shortest run to report, 
 a = ap.parse_args()
 HOP, SR = 0.05, 16000
 raw = subprocess.run(["ffmpeg", "-v", "error", "-i", a.media, "-vn", "-ac", "1", "-ar", str(SR),
-                      "-f", "s16le", "pipe:1"], capture_output=True, timeout=900).stdout
+                      "-f", "s16le", "pipe:1"], capture_output=True, timeout=900, check=True).stdout
 x = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
 n = int(SR * HOP); m = len(x) // n
 r = np.sqrt((x[:m * n].reshape(m, n) ** 2).mean(1))
