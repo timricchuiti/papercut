@@ -23,6 +23,9 @@ timeline offsets** so the spine still tiles; markers travel with their clips.
 | `papercut_pausepolicy.py <fcpxml> <json> <audio16k.wav> [--motion cnt10.npy] [--keep 2] [--air 1] [--override t=air]` | Experimental pause policy (pure pauses ≤ keep stay whole, longer ones cut to `air` seconds placed by screen motion). **Withdrawn 2026-10-14** — Tim wants DM lessons tight except between problems; see EDITING_PROTOCOL.md. Kept for reference. |
 | `papercut_cut_audio.py <fcpxml> <media> <out.m4a>` | Render the cut's audio (concat of the kept spans) — result-time cues for animation timing. |
 | `papercut_phrase_cuts.py <cuts.py> [names…]` | Phrase-anchored re-cuts of existing videos from a word list, for sources where amplitude silence detection is unusable. |
+| `papercut_rms.py <media> <out.npy>` / `papercut_rms.py <npy> [--thr 0.01] <lo-hi> …` | 50 ms RMS loudness profile of the media, then the loud runs inside chosen source ranges. The ground truth for whether an MLX ghost / zero-width run is really in the audio and where a pause actually starts. |
+| `papercut_cut_av.py <ALTERED.fcpxml> <PC.mp4> <out.mp4> [--size 720x1280] [--fps 60]` | Render the cut as a small AV file (the "AVfortiming" export the painted pipeline times to) straight from the FCPXML, no FCP round-trip. |
+| `papercut_audiodelay.py <in.fcpxml> <out.fcpxml> <frames>` | Sync variant: every spine clip becomes video-only with a lane -1 audio child of the same window placed `<frames>` later (use when the source's audio runs ahead of its picture in FCP). Run LAST; project renamed to the output stem. |
 
 Mouse-click slivers (isolated 0.1–0.2 s no-word clips in long pauses) are dropped by
 the exporter itself now (`--sliver`, default 0.25 s; the export message counts them),
